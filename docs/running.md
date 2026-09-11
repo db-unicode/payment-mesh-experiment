@@ -42,6 +42,15 @@ BASE_URL=http://127.0.0.1:<node-port> INGRESS_HOST=payments.local mise run exper
 mise run report
 ```
 
+Para observar la corrida en Kiali, instálalo una vez y deja el port-forward abierto en otra terminal:
+
+```bash
+mise run kiali-install
+mise run kiali-ui
+```
+
+Abre `http://127.0.0.1:20001`; Kiali queda conectado al Prometheus y Jaeger del namespace `observability`. En **Graph**, selecciona el namespace `payments` y un intervalo que incluya la corrida.
+
 ## Gateway scenarios
 
 Los mocks sirven TLS en `https://localhost:8091` (card) y `https://localhost:8092` (bank). El router local permite el certificado autofirmado mediante `GATEWAY_TLS_INSECURE=true`; en Kubernetes la aplicación habla HTTP hasta Istio y el egress gateway origina TLS hacia los mocks del host (`host.docker.internal`). Cambia un comportamiento con `curl -k -X POST https://localhost:8091/admin/behavior -H 'content-type: application/json' -d '{"behavior":"timeout"}'`. Los contratos son distintos: card usa `/v1/card/authorizations` y estados `AUTHORIZED/DECLINED`; bank usa `/v2/transfers` y estados `ACCEPTED/REJECTED`.
