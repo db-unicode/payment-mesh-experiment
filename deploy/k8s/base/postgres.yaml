@@ -52,6 +52,7 @@ spec:
           image: postgres:16-alpine
           ports: [{ containerPort: 5432 }]
           envFrom: [{ secretRef: { name: operator-db } }]
+          readinessProbe: { exec: { command: [pg_isready, -U, operator, -d, operator] }, initialDelaySeconds: 2, periodSeconds: 2 }
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
       volumes: [{ name: data, persistentVolumeClaim: { claimName: operator-db-data } }]
 ---
@@ -75,6 +76,7 @@ spec:
           image: postgres:16-alpine
           ports: [{ containerPort: 5432 }]
           envFrom: [{ secretRef: { name: participant-db } }]
+          readinessProbe: { exec: { command: [pg_isready, -U, participants, -d, participants] }, initialDelaySeconds: 2, periodSeconds: 2 }
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
       volumes: [{ name: data, persistentVolumeClaim: { claimName: participant-db-data } }]
 ---
@@ -98,6 +100,7 @@ spec:
           image: postgres:16-alpine
           ports: [{ containerPort: 5432 }]
           envFrom: [{ secretRef: { name: router-db } }]
+          readinessProbe: { exec: { command: [pg_isready, -U, router, -d, router] }, initialDelaySeconds: 2, periodSeconds: 2 }
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
       volumes: [{ name: data, persistentVolumeClaim: { claimName: router-db-data } }]
 ---
