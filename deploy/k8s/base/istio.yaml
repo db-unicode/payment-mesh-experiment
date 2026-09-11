@@ -15,3 +15,16 @@ spec:
   gateways: [payment-ingress]
   http:
     - route: [{ destination: { host: payment-operator, port: { number: 8080 } } }]
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata: { name: payment-router-retries }
+spec:
+  hosts: [payment-router]
+  gateways: [mesh]
+  http:
+    - route: [{ destination: { host: payment-router, port: { number: 8080 } } }]
+      retries:
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: reset,connect-failure,refused-stream,unavailable,5xx

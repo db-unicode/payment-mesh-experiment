@@ -35,7 +35,7 @@ capture_common() {
   curl -kfsS "$CARD_GATEWAY/stats" > "$dir/metrics/card-stats.json" 2> "$dir/logs/card-stats.err"; printf '%s\n' "$?" > "$dir/metrics/card-stats.json.exit"
   curl -kfsS "$BANK_GATEWAY/stats" > "$dir/metrics/bank-stats.json" 2> "$dir/logs/bank-stats.err"; printf '%s\n' "$?" > "$dir/metrics/bank-stats.json.exit"
   curl -fsS "${JAEGER_URL:-http://localhost:16686}/api/services" > "$dir/traces/jaeger-services.json" 2> "$dir/logs/jaeger.err"; printf '%s\n' "$?" > "$dir/traces/jaeger-services.json.exit"
-  curl -fsS "${JAEGER_URL:-http://localhost:16686}/api/traces?service=payment-operator&limit=20" > "$dir/traces/payment-operator.json" 2>> "$dir/logs/jaeger.err"; printf '%s\n' "$?" > "$dir/traces/payment-operator.json.exit"
+  curl -fsS "${JAEGER_URL:-http://localhost:16686}/api/traces?service=payment-operator.payments&limit=20" > "$dir/traces/payment-operator.json" 2>> "$dir/logs/jaeger.err"; printf '%s\n' "$?" > "$dir/traces/payment-operator.json.exit"
   curl -fsSG "${PROMETHEUS_URL:-http://localhost:9090}/api/v1/query" --data-urlencode 'query=sum(rate(istio_requests_total[1m])) by (source_workload,destination_workload,response_code)' > "$dir/metrics/istio-requests.json" 2> "$dir/logs/prometheus.err"; printf '%s\n' "$?" > "$dir/metrics/istio-requests.json.exit"
   if command -v kubectl >/dev/null 2>&1 && kubectl get namespace payments >/dev/null 2>&1; then
     kubectl get events -n payments --sort-by=.lastTimestamp > "$dir/events/kubernetes-events.txt" 2> "$dir/logs/kubernetes-events.err"
@@ -118,12 +118,13 @@ printf '{"status":"%s","result":"Ten responses and provider counters were captur
 write_metadata 06-participant-db-failure "La caída de participant DB queda aislada y retorna un error explícito de dependencia." "disponibilidad, estado HTTP, eventos" "El estado del router permanece intacto y la dependencia de participantes no está disponible"
 if command -v kubectl >/dev/null 2>&1 && kubectl get deployment participant-db -n payments >/dev/null 2>&1; then
   kubectl scale deployment participant-db -n payments --replicas=0 > "$ROOT/06-participant-db-failure/events/kubectl-scale-down.out" 2> "$ROOT/06-participant-db-failure/logs/kubectl-scale-down.err"; down=$?
+  kubectl wait --for=delete pod -n payments -l app=participant-db --timeout=120s > "$ROOT/06-participant-db-failure/events/kubectl-wait-down.out" 2> "$ROOT/06-participant-db-failure/logs/kubectl-wait-down.err"; wait_down=$?
   api_curl -sS -o "$ROOT/06-participant-db-failure/events/request.json" -w '%{http_code}\n' -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: db-failure-$STAMP" -d '{"debtor_participant_id":"participant-card","creditor_participant_id":"participant-bank","amount_minor":1200,"currency":"COP","reference":"db-failure"}' > "$ROOT/06-participant-db-failure/events/http-status.txt" 2> "$ROOT/06-participant-db-failure/logs/request.err"; request=$?
   kubectl exec -n payments deployment/router-db -c postgres -- pg_isready > "$ROOT/06-participant-db-failure/events/router-db-readiness.txt" 2>&1
   kubectl scale deployment participant-db -n payments --replicas=1 > "$ROOT/06-participant-db-failure/events/kubectl-scale-up.out" 2> "$ROOT/06-participant-db-failure/logs/kubectl-scale-up.err"; up=$?
   kubectl rollout status deployment/participant-db -n payments --timeout=180s > "$ROOT/06-participant-db-failure/events/kubectl-rollout.out" 2> "$ROOT/06-participant-db-failure/logs/kubectl-rollout.err"; rollout=$?
   status=EXECUTED
-  if [ "$down" -ne 0 ] || [ "$up" -ne 0 ] || [ "$request" -ne 0 ] || [ "$rollout" -ne 0 ]; then status=FAILED; fi
+  if [ "$down" -ne 0 ] || [ "$wait_down" -ne 0 ] || [ "$up" -ne 0 ] || [ "$request" -ne 0 ] || [ "$rollout" -ne 0 ]; then status=FAILED; fi
 else
   printf '%s\n' 'NOT EXECUTED: Kubernetes deployment payments/participant-db is unavailable.' > "$ROOT/06-participant-db-failure/events/kubernetes.skip"
   status=NOT_EXECUTED

@@ -58,7 +58,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata: { name: operator-db }
-spec: { selector: { app: operator-db }, ports: [{ port: 5432, targetPort: 5432 }] }
+spec: { selector: { app: operator-db }, ports: [{ name: tcp-postgres, port: 5432, targetPort: 5432 }] }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -81,7 +81,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata: { name: participant-db }
-spec: { selector: { app: participant-db }, ports: [{ port: 5432, targetPort: 5432 }] }
+spec: { selector: { app: participant-db }, ports: [{ name: tcp-postgres, port: 5432, targetPort: 5432 }] }
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -104,4 +104,4 @@ spec:
 apiVersion: v1
 kind: Service
 metadata: { name: router-db }
-spec: { selector: { app: router-db }, ports: [{ port: 5432, targetPort: 5432 }] }
+spec: { selector: { app: router-db }, ports: [{ name: tcp-postgres, port: 5432, targetPort: 5432 }] }

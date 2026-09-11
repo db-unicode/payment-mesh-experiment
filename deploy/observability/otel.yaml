@@ -18,4 +18,4 @@ spec:
 apiVersion: v1
 kind: Service
 metadata: { name: otel-collector }
-spec: { selector: { app: otel-collector }, ports: [{ name: otlp-grpc, port: 4317 }, { name: otlp-http, port: 4318 }] }
+spec: { selector: { app: otel-collector }, ports: [{ name: grpc-otlp, port: 4317 }, { name: http-otlp, port: 4318 }] }

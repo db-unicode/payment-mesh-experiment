@@ -184,8 +184,13 @@ func (s *server) participant(ctx context.Context, id string) (payments.Participa
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return p, errors.New(strings.TrimSpace(string(b)))
+		var upstreamError struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&upstreamError) == nil && upstreamError.Error != "" {
+			return p, errors.New(upstreamError.Error)
+		}
+		return p, errors.New("participant lookup failed")
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
 		return p, errors.New("invalid participant response")

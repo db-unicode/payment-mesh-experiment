@@ -72,12 +72,13 @@ func cardAuthorization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state.Lock()
-	defer state.Unlock()
 	state.stats.Attempts++
 	if old, ok := state.card[req.RequestID]; ok {
+		state.Unlock()
 		write(w, 200, old)
 		return
 	}
+	state.Unlock()
 	if waitProvider(r) {
 		return
 	}
@@ -88,14 +89,28 @@ func cardAuthorization(w http.ResponseWriter, r *http.Request) {
 	}
 	if behavior == "decline" {
 		res := cardResult{State: "DECLINED", Message: "card authorization declined"}
+		state.Lock()
+		if old, ok := state.card[req.RequestID]; ok {
+			state.Unlock()
+			write(w, 200, old)
+			return
+		}
 		state.card[req.RequestID] = res
 		state.stats.EffectiveCharges++
+		state.Unlock()
 		write(w, 200, res)
 		return
 	}
 	res := cardResult{State: "AUTHORIZED", AuthorizationID: fmt.Sprintf("card-auth-%d", time.Now().UnixNano())}
+	state.Lock()
+	if old, ok := state.card[req.RequestID]; ok {
+		state.Unlock()
+		write(w, 200, old)
+		return
+	}
 	state.card[req.RequestID] = res
 	state.stats.EffectiveCharges++
+	state.Unlock()
 	write(w, 200, res)
 }
 func bankTransfer(w http.ResponseWriter, r *http.Request) {
@@ -109,12 +124,13 @@ func bankTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state.Lock()
-	defer state.Unlock()
 	state.stats.Attempts++
 	if old, ok := state.bank[req.TransferID]; ok {
+		state.Unlock()
 		write(w, 200, old)
 		return
 	}
+	state.Unlock()
 	if waitProvider(r) {
 		return
 	}
@@ -125,14 +141,28 @@ func bankTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	if behavior == "decline" {
 		res := bankResult{Decision: "REJECTED", Message: "bank transfer rejected"}
+		state.Lock()
+		if old, ok := state.bank[req.TransferID]; ok {
+			state.Unlock()
+			write(w, 200, old)
+			return
+		}
 		state.bank[req.TransferID] = res
 		state.stats.EffectiveCharges++
+		state.Unlock()
 		write(w, 200, res)
 		return
 	}
 	res := bankResult{Decision: "ACCEPTED", TransferID: fmt.Sprintf("bank-transfer-%d", time.Now().UnixNano())}
+	state.Lock()
+	if old, ok := state.bank[req.TransferID]; ok {
+		state.Unlock()
+		write(w, 200, old)
+		return
+	}
 	state.bank[req.TransferID] = res
 	state.stats.EffectiveCharges++
+	state.Unlock()
 	write(w, 200, res)
 }
 func waitProvider(r *http.Request) bool {
