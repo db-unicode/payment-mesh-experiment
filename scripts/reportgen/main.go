@@ -139,10 +139,13 @@ func expDegraded(root, name string) measurement {
 	raw, _ := os.ReadFile(filepath.Join(dir, "events", "timeout-http-status.txt"))
 	timeout := strings.Contains(string(raw), "202")
 	response := strings.Contains(readFile(filepath.Join(dir, "events", "timeout-response.json")), `"status":"PENDING"`)
-	breakerEvidence := readFile(filepath.Join(dir, "metrics", "circuit-breaker-verification.txt"))
-	breaker := positiveEnvoyMetric(breakerEvidence, "ejections_enforced_total")
+	breakerBefore := readFile(filepath.Join(dir, "metrics", "egress-envoy-stats-before.txt"))
+	breakerAfter := readFile(filepath.Join(dir, "metrics", "egress-envoy-stats.txt"))
+	beforeEjections := envoyMetricTotal(breakerBefore, "ejections_enforced_total")
+	afterEjections := envoyMetricTotal(breakerAfter, "ejections_enforced_total")
+	breaker := afterEjections > beforeEjections
 	pass := ok && failures == 0 && timeout && response && breaker
-	return measurement{name, "Pasarela degradada", "Locust fallos, p95, timeout, estado y breaker", fmt.Sprintf("fallos=%d; p95=%d ms; HTTP202=%t; PENDING=%t; ejection=%t", failures, p95, timeout, response, breaker), "0 fallos, HTTP 202, PENDING y expulsión Envoy", status(pass, ok && breakerEvidence != ""), dir}
+	return measurement{name, "Pasarela degradada", "Locust fallos, p95, timeout, estado y breaker", fmt.Sprintf("fallos=%d; p95=%d ms; HTTP202=%t; PENDING=%t; ejections=%.0f→%.0f", failures, p95, timeout, response, beforeEjections, afterEjections), "0 fallos, HTTP 202, PENDING y aumenta el contador de expulsiones Envoy", status(pass, ok && breakerBefore != "" && breakerAfter != ""), dir}
 }
 func expNormalization(root, name string) measurement {
 	dir := filepath.Join(root, name)
@@ -269,7 +272,8 @@ func sameChecksums(dir string) (bool, int) {
 	}
 	return true, len(files)
 }
-func positiveEnvoyMetric(raw, metric string) bool {
+func envoyMetricTotal(raw, metric string) float64 {
+	var total float64
 	for _, line := range strings.Split(raw, "\n") {
 		if !strings.Contains(line, metric+":") {
 			continue
@@ -280,10 +284,10 @@ func positiveEnvoyMetric(raw, metric string) bool {
 		}
 		value, err := strconv.ParseFloat(fields[len(fields)-1], 64)
 		if err == nil && value > 0 {
-			return true
+			total += value
 		}
 	}
-	return false
+	return total
 }
 func status(pass, evidence bool) string {
 	if !evidence {

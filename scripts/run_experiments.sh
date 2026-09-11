@@ -92,6 +92,10 @@ capture_common 02-instance-failure
 printf '{"status":"%s","result":"Pod-failure command and load were run only when Kubernetes was available.","evidence":"evidence/runs/%s/02-instance-failure"}\n' "$status" "$STAMP" > "$ROOT/02-instance-failure/verdict.json"
 
 # 3. Degraded provider: 5xx/timeout become PENDING and breaker evidence is captured.
+mkdir -p "$ROOT/03-gateway-degraded/metrics" "$ROOT/03-gateway-degraded/logs"
+if command -v kubectl >/dev/null 2>&1 && kubectl get deployment istio-egressgateway -n istio-system >/dev/null 2>&1; then
+  kubectl exec -n istio-system deployment/istio-egressgateway -- pilot-agent request GET stats > "$ROOT/03-gateway-degraded/metrics/egress-envoy-stats-before.txt" 2> "$ROOT/03-gateway-degraded/logs/egress-stats-before.err"
+fi
 set_behavior "$CARD_GATEWAY" error
 run_experiment 03-gateway-degraded "Una pasarela degradada no duplica ni convierte incertidumbre en rechazo." "PENDING, circuit breaker, p95" "PENDING y evidencia de apertura del circuito" degraded
 set_behavior "$CARD_GATEWAY" timeout
