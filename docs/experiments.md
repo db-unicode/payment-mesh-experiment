@@ -4,7 +4,7 @@ El perfil predeterminado es 10 usuarios, 2 usuarios/s y 120 segundos; se puede p
 
 | ID | Experimento | Hipótesis | Evidencia/criterio |
 |---|---|---|---|
-| 1 | Happy mesh | ingress, mTLS y tracing acompañan el happy path | `SUCCEEDED`, p95 y servicio de trazas |
+| 1 | Happy mesh | ingress, mTLS y tracing acompañan el happy path | `SUCCEEDED`, p95, trazas, secretos/certificados activos y listener mTLS |
 | 2 | Fallo de instancia | eliminar una réplica de router no interrumpe el servicio | disponibilidad, p95 y eventos de Kubernetes |
 | 3 | Pasarela degradada | 5xx/timeout quedan `PENDING` y el breaker evita una cascada | estados, p95, métricas de breaker |
 | 4 | Normalización multi-proveedor | dos contratos y estados de proveedor producen un modelo común | card/bank y `SUCCEEDED/FAILED/PENDING` |

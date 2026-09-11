@@ -8,6 +8,11 @@ spec:
     defaultConfig:
       proxyMetadata:
         ISTIO_META_DNS_CAPTURE: "true"
+      proxyStatsMatcher:
+        inclusionRegexps:
+          - ".*outlier_detection.*"
+          - ".*upstream_rq_pending_overflow.*"
+          - ".*upstream_cx_connect_fail.*"
     extensionProviders:
       - name: otel-tracing
         opentelemetry:

@@ -36,12 +36,18 @@ capture_common() {
   curl -kfsS "$BANK_GATEWAY/stats" > "$dir/metrics/bank-stats.json" 2> "$dir/logs/bank-stats.err"; printf '%s\n' "$?" > "$dir/metrics/bank-stats.json.exit"
   curl -fsS "${JAEGER_URL:-http://localhost:16686}/api/services" > "$dir/traces/jaeger-services.json" 2> "$dir/logs/jaeger.err"; printf '%s\n' "$?" > "$dir/traces/jaeger-services.json.exit"
   curl -fsS "${JAEGER_URL:-http://localhost:16686}/api/traces?service=payment-operator.payments&limit=20" > "$dir/traces/payment-operator.json" 2>> "$dir/logs/jaeger.err"; printf '%s\n' "$?" > "$dir/traces/payment-operator.json.exit"
-  curl -fsSG "${PROMETHEUS_URL:-http://localhost:9090}/api/v1/query" --data-urlencode 'query=sum(rate(istio_requests_total[1m])) by (source_workload,destination_workload,response_code)' > "$dir/metrics/istio-requests.json" 2> "$dir/logs/prometheus.err"; printf '%s\n' "$?" > "$dir/metrics/istio-requests.json.exit"
+  curl -fsSG "${PROMETHEUS_URL:-http://localhost:9090}/api/v1/query" --data-urlencode 'query=sum(rate(payments_requests_total[1m])) by (job)' > "$dir/metrics/payment-request-rate.json" 2> "$dir/logs/prometheus.err"; printf '%s\n' "$?" > "$dir/metrics/payment-request-rate.json.exit"
   if command -v kubectl >/dev/null 2>&1 && kubectl get namespace payments >/dev/null 2>&1; then
     kubectl get events -n payments --sort-by=.lastTimestamp > "$dir/events/kubernetes-events.txt" 2> "$dir/logs/kubernetes-events.err"
     kubectl logs -n payments deployment/payment-operator -c app --tail=300 > "$dir/logs/payment-operator.log" 2>&1
     kubectl logs -n payments deployment/payment-router -c app --tail=300 --prefix > "$dir/logs/payment-router.log" 2>&1
     kubectl exec -n istio-system deployment/istio-egressgateway -- pilot-agent request GET stats > "$dir/metrics/egress-envoy-stats.txt" 2> "$dir/logs/egress-stats.err"
+    kubectl get peerauthentication,authorizationpolicy -A -o yaml > "$dir/events/zero-trust-policies.yaml" 2> "$dir/logs/zero-trust-policies.err"
+    if command -v istioctl >/dev/null 2>&1; then
+      istioctl proxy-status > "$dir/events/istio-proxy-status.txt" 2> "$dir/logs/istio-proxy-status.err"
+      istioctl proxy-config secret deployment/payment-operator.payments > "$dir/events/operator-mtls-secrets.txt" 2> "$dir/logs/operator-mtls-secrets.err"
+      istioctl proxy-config listener deployment/istio-egressgateway.istio-system --port 8080 -o json > "$dir/events/egress-mtls-listener.json" 2> "$dir/logs/egress-mtls-listener.err"
+    fi
   fi
 }
 

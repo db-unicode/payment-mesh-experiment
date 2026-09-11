@@ -87,11 +87,11 @@ spec:
   workloadSelector:
     matchLabels: { istio: egressgateway }
   trafficPolicy:
-    connectionPool: { http: { http1MaxPendingRequests: 50, maxRequestsPerConnection: 10 } }
-    outlierDetection: { consecutive5xxErrors: 5, interval: 5s, baseEjectionTime: 30s, maxEjectionPercent: 100 }
     portLevelSettings:
       - port: { number: 443 }
         tls: { mode: SIMPLE, sni: gateway-card.mesh.local, credentialName: gateway-ca }
+        connectionPool: { http: { http1MaxPendingRequests: 50, maxRequestsPerConnection: 10 } }
+        outlierDetection: { consecutive5xxErrors: 5, interval: 5s, baseEjectionTime: 30s, maxEjectionPercent: 100 }
 ---
 apiVersion: networking.istio.io/v1beta1
 kind: DestinationRule
@@ -101,8 +101,8 @@ spec:
   workloadSelector:
     matchLabels: { istio: egressgateway }
   trafficPolicy:
-    connectionPool: { http: { http1MaxPendingRequests: 50, maxRequestsPerConnection: 10 } }
-    outlierDetection: { consecutive5xxErrors: 5, interval: 5s, baseEjectionTime: 30s, maxEjectionPercent: 100 }
     portLevelSettings:
       - port: { number: 443 }
         tls: { mode: SIMPLE, sni: gateway-bank.mesh.local, credentialName: gateway-ca }
+        connectionPool: { http: { http1MaxPendingRequests: 50, maxRequestsPerConnection: 10 } }
+        outlierDetection: { consecutive5xxErrors: 5, interval: 5s, baseEjectionTime: 30s, maxEjectionPercent: 100 }
