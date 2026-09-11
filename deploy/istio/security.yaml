@@ -1,0 +1,54 @@
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: payments
+spec:
+  mtls: { mode: STRICT }
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-operator-admin
+  namespace: payments
+spec:
+  selector: { matchLabels: { app: payment-operator } }
+  action: DENY
+  rules:
+    - to: [{ operation: { paths: ["/admin/*"] } }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-ingress-to-operator
+  namespace: payments
+spec:
+  selector: { matchLabels: { app: payment-operator } }
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"] } }]
+      to: [{ operation: { methods: ["GET", "POST"], paths: ["/v1/payments", "/v1/payments/*", "/healthz", "/readyz"] } }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-operator-to-mesh
+  namespace: payments
+spec:
+  selector: { matchLabels: { app: payment-router } }
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-operator"] } }]
+      to: [{ operation: { methods: ["POST"], paths: ["/internal/v1/payments"] } }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-operator-to-participants
+  namespace: payments
+spec:
+  selector: { matchLabels: { app: participant-payment-manager } }
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-operator"] } }]
+      to: [{ operation: { methods: ["GET"], paths: ["/v1/participants/*"] } }]

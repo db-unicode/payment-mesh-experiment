@@ -1,0 +1,54 @@
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: payment-gateways
+  namespace: payments
+spec:
+  hosts: [gateway-card.external.example, gateway-bank.external.example]
+  location: MESH_EXTERNAL
+  ports:
+    - { number: 443, name: https, protocol: HTTPS }
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: payment-egress
+  namespace: payments
+spec:
+  selector: { istio: egressgateway }
+  servers:
+    - port: { number: 443, name: tls, protocol: TLS }
+      hosts: [gateway-card.external.example, gateway-bank.external.example]
+      tls: { mode: PASSTHROUGH }
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: payment-gateways
+  namespace: payments
+spec:
+  hosts: [gateway-card.external.example, gateway-bank.external.example]
+  gateways: [mesh, payment-egress]
+  tls:
+    - match: [{ gateways: [mesh], port: 443, sniHosts: [gateway-card.external.example, gateway-bank.external.example] }]
+      route: [{ destination: { host: istio-egressgateway.istio-system.svc.cluster.local, port: { number: 443 } } }]
+    - match: [{ gateways: [payment-egress], port: 443, sniHosts: [gateway-card.external.example, gateway-bank.external.example] }]
+      route: [{ destination: { host: gateway-card.external.example, port: { number: 443 } } }]
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: payment-gateways
+  namespace: payments
+spec:
+  host: "*.external.example"
+  trafficPolicy:
+    tls: { mode: SIMPLE }
+    connectionPool:
+      http: { http1MaxPendingRequests: 50, maxRequestsPerConnection: 10 }
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 5s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100

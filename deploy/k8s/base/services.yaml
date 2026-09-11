@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: participant-payment-manager }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: participant-payment-manager } }
+  template:
+    metadata: { labels: { app: participant-payment-manager } }
+    spec:
+      containers:
+        - name: app
+          image: payment-participant-manager:dev
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: PARTICIPANT_DATABASE_URL, value: "postgres://participants:participants@participant-db:5432/participants?sslmode=disable" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: participant-payment-manager }
+spec: { selector: { app: participant-payment-manager }, ports: [{ port: 8080, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: payment-router }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: payment-router } }
+  template:
+    metadata: { labels: { app: payment-router } }
+    spec:
+      containers:
+        - name: app
+          image: payment-router:dev
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: ROUTER_DATABASE_URL, value: "postgres://router:router@router-db:5432/router?sslmode=disable" }
+            - { name: GATEWAY_CARD_URL, value: "https://gateway-card.external.example" }
+            - { name: GATEWAY_BANK_URL, value: "https://gateway-bank.external.example" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: payment-router }
+spec: { selector: { app: payment-router }, ports: [{ port: 8080, targetPort: 8080 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: payment-operator }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: payment-operator } }
+  template:
+    metadata: { labels: { app: payment-operator } }
+    spec:
+      containers:
+        - name: app
+          image: payment-operator:dev
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: OPERATOR_DATABASE_URL, value: "postgres://operator:operator@operator-db:5432/operator?sslmode=disable" }
+            - { name: PARTICIPANT_MANAGER_URL, value: "http://participant-payment-manager:8080" }
+            - { name: ROUTER_URL, value: "http://payment-router:8080" }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: payment-operator }
+spec: { selector: { app: payment-operator }, ports: [{ port: 8080, targetPort: 8080 }] }

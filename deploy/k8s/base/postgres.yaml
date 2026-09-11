@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Secret
+metadata: { name: operator-db }
+type: Opaque
+stringData: { POSTGRES_DB: operator, POSTGRES_USER: operator, POSTGRES_PASSWORD: operator }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: participant-db }
+type: Opaque
+stringData: { POSTGRES_DB: participants, POSTGRES_USER: participants, POSTGRES_PASSWORD: participants }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: router-db }
+type: Opaque
+stringData: { POSTGRES_DB: router, POSTGRES_USER: router, POSTGRES_PASSWORD: router }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: operator-db }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: operator-db } }
+  template:
+    metadata: { labels: { app: operator-db } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          envFrom: [{ secretRef: { name: operator-db } }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: operator-db }
+spec: { selector: { app: operator-db }, ports: [{ port: 5432, targetPort: 5432 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: participant-db }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: participant-db } }
+  template:
+    metadata: { labels: { app: participant-db } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          envFrom: [{ secretRef: { name: participant-db } }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: participant-db }
+spec: { selector: { app: participant-db }, ports: [{ port: 5432, targetPort: 5432 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: router-db }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: router-db } }
+  template:
+    metadata: { labels: { app: router-db } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          envFrom: [{ secretRef: { name: router-db } }]
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: router-db }
+spec: { selector: { app: router-db }, ports: [{ port: 5432, targetPort: 5432 }] }
