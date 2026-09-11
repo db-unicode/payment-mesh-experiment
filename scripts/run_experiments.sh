@@ -102,8 +102,13 @@ run_experiment 03-gateway-degraded "Una pasarela degradada no duplica ni convier
 set_behavior "$CARD_GATEWAY" timeout
 api_curl -sS -o "$ROOT/03-gateway-degraded/events/timeout-response.json" -w '%{http_code}\n' -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: timeout-$STAMP" -d '{"debtor_participant_id":"participant-card","creditor_participant_id":"participant-bank","amount_minor":1200,"currency":"COP","reference":"timeout-evidence"}' > "$ROOT/03-gateway-degraded/events/timeout-http-status.txt" 2> "$ROOT/03-gateway-degraded/logs/timeout-request.err"
 set_behavior "$CARD_GATEWAY" success
-printf '%s\n' "$BREAKER_RECOVERY_SECONDS" > "$ROOT/03-gateway-degraded/events/breaker-recovery-wait-seconds.txt"
-sleep "$BREAKER_RECOVERY_SECONDS"
+if command -v kubectl >/dev/null 2>&1 && kubectl get deployment istio-egressgateway -n istio-system >/dev/null 2>&1; then
+  kubectl rollout restart deployment/istio-egressgateway -n istio-system > "$ROOT/03-gateway-degraded/events/egress-reset.out" 2> "$ROOT/03-gateway-degraded/logs/egress-reset.err"
+  kubectl rollout status deployment/istio-egressgateway -n istio-system --timeout=120s > "$ROOT/03-gateway-degraded/events/egress-reset-status.out" 2> "$ROOT/03-gateway-degraded/logs/egress-reset-status.err"
+else
+  printf '%s\n' "$BREAKER_RECOVERY_SECONDS" > "$ROOT/03-gateway-degraded/events/breaker-recovery-wait-seconds.txt"
+  sleep "$BREAKER_RECOVERY_SECONDS"
+fi
 
 # 4. Two real provider contracts normalize to the common status model.
 write_metadata 04-provider-normalization "Los estados de tarjeta y banco se normalizan al mismo modelo público." "estado del proveedor, estado normalizado" "AUTHORIZED/ACCEPTED se vuelven SUCCEEDED; DECLINED/REJECTED se vuelven FAILED"
