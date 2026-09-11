@@ -1,0 +1,17 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata: { name: payment-ingress }
+spec:
+  selector: { istio: ingressgateway }
+  servers:
+    - port: { number: 80, name: http, protocol: HTTP }
+      hosts: ["payments.local"]
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata: { name: payment-operator }
+spec:
+  hosts: ["payments.local"]
+  gateways: [payment-ingress]
+  http:
+    - route: [{ destination: { host: payment-operator, port: { number: 8080 } } }]
