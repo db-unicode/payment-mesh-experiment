@@ -109,6 +109,18 @@ else
   printf '%s\n' "$BREAKER_RECOVERY_SECONDS" > "$ROOT/03-gateway-degraded/events/breaker-recovery-wait-seconds.txt"
   sleep "$BREAKER_RECOVERY_SECONDS"
 fi
+recovery_attempt=1
+recovered=false
+while [ "$recovery_attempt" -le 12 ]; do
+  card_probe="$ROOT/03-gateway-degraded/events/recovery-card-$recovery_attempt.json"
+  bank_probe="$ROOT/03-gateway-degraded/events/recovery-bank-$recovery_attempt.json"
+  api_curl -sS -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: recovery-card-$STAMP-$recovery_attempt" -d '{"debtor_participant_id":"participant-card","creditor_participant_id":"participant-bank","amount_minor":1200,"currency":"COP","reference":"recovery-probe-card"}' > "$card_probe"
+  api_curl -sS -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: recovery-bank-$STAMP-$recovery_attempt" -d '{"debtor_participant_id":"participant-bank","creditor_participant_id":"participant-card","amount_minor":1200,"currency":"COP","reference":"recovery-probe-bank"}' > "$bank_probe"
+  if grep -q '"status":"SUCCEEDED"' "$card_probe" && grep -q '"status":"SUCCEEDED"' "$bank_probe"; then recovered=true; break; fi
+  recovery_attempt=$((recovery_attempt + 1))
+  sleep 5
+done
+printf '{"recovered":%s,"attempts":%s}\n' "$recovered" "$recovery_attempt" > "$ROOT/03-gateway-degraded/events/egress-recovery-verdict.json"
 
 # 4. Two real provider contracts normalize to the common status model.
 write_metadata 04-provider-normalization "Los estados de tarjeta y banco se normalizan al mismo modelo público." "estado del proveedor, estado normalizado" "AUTHORIZED/ACCEPTED se vuelven SUCCEEDED; DECLINED/REJECTED se vuelven FAILED"
