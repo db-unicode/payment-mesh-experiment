@@ -10,11 +10,11 @@ import (
 )
 
 type PaymentRequest struct {
-	AmountMinor    int64  `json:"amount_minor"`
-	Currency       string `json:"currency"`
-	Instrument     string `json:"instrument"`
-	ParticipantID  string `json:"participant_id"`
-	Description    string `json:"description,omitempty"`
+	AmountMinor   int64  `json:"amount_minor"`
+	Currency      string `json:"currency"`
+	Instrument    string `json:"instrument"`
+	ParticipantID string `json:"participant_id"`
+	Description   string `json:"description,omitempty"`
 }
 
 type PaymentResponse struct {
@@ -36,23 +36,35 @@ type Participant struct {
 
 func RequestHash(req PaymentRequest) (string, error) {
 	b, err := json.Marshal(req)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:]), nil
 }
 
 func ValidateRequest(req PaymentRequest) error {
-	if req.AmountMinor <= 0 { return fmt.Errorf("amount_minor must be positive") }
-	if len(req.Currency) != 3 { return fmt.Errorf("currency must be ISO 4217") }
-	if strings.TrimSpace(req.Instrument) == "" { return fmt.Errorf("instrument is required") }
-	if strings.TrimSpace(req.ParticipantID) == "" { return fmt.Errorf("participant_id is required") }
+	if req.AmountMinor <= 0 {
+		return fmt.Errorf("amount_minor must be positive")
+	}
+	if len(req.Currency) != 3 {
+		return fmt.Errorf("currency must be ISO 4217")
+	}
+	if strings.TrimSpace(req.Instrument) == "" {
+		return fmt.Errorf("instrument is required")
+	}
+	if strings.TrimSpace(req.ParticipantID) == "" {
+		return fmt.Errorf("participant_id is required")
+	}
 	return nil
 }
 
 func NormalizeStatus(status string) string {
 	switch status {
-	case "SUCCEEDED", "FAILED", "PENDING": return status
-	default: return "PENDING"
+	case "SUCCEEDED", "FAILED", "PENDING":
+		return status
+	default:
+		return "PENDING"
 	}
 }
 

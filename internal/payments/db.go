@@ -10,17 +10,24 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-type DB struct { SQL *sql.DB }
+type DB struct{ SQL *sql.DB }
 
 func Open(ctx context.Context, envName string) (*DB, error) {
 	url := os.Getenv(envName)
-	if url == "" { return nil, fmt.Errorf("%s is required", envName) }
+	if url == "" {
+		return nil, fmt.Errorf("%s is required", envName)
+	}
 	db, err := sql.Open("pgx", url)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxIdleTime(5 * time.Minute)
-	if err := db.PingContext(ctx); err != nil { _ = db.Close(); return nil, err }
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &DB{SQL: db}, nil
 }
 
