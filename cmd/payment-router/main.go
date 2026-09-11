@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -19,15 +17,11 @@ import (
 )
 
 type server struct {
-	db       *payments.DB
-	client   *http.Client
-	circuits map[string]*payments.Circuit
-	metrics  payments.Metrics
-}
-type gatewayResponse struct {
-	Status      string `json:"status"`
-	ProviderRef string `json:"provider_ref"`
-	Error       string `json:"error"`
+	db             *payments.DB
+	circuits       map[string]*payments.Circuit
+	metrics        payments.Metrics
+	adapters       map[string]func(context.Context, payments.RouterPaymentRequest, string) payments.ProviderResult
+	breakerEnabled bool
 }
 
 func main() {
@@ -40,7 +34,11 @@ func main() {
 	if err = db.EnsurePayments(ctx); err != nil {
 		log.Fatal(err)
 	}
-	s := &server{db: db, client: &http.Client{Timeout: 2 * time.Second}, circuits: map[string]*payments.Circuit{"gateway-card": payments.NewCircuit(5, 30*time.Second), "gateway-bank": payments.NewCircuit(5, 30*time.Second)}}
+	insecure := getenv("GATEWAY_TLS_INSECURE", "false") == "true"
+	providerClient := payments.NewProviderClient(2, insecure)
+	card := payments.CardAdapter{BaseURL: getenv("GATEWAY_CARD_URL", "https://gateway-card:8443"), Client: providerClient}
+	bank := payments.BankAdapter{BaseURL: getenv("GATEWAY_BANK_URL", "https://gateway-bank:8443"), Client: providerClient}
+	s := &server{db: db, circuits: map[string]*payments.Circuit{"gateway-card": payments.NewCircuit(5, 30*time.Second), "gateway-bank": payments.NewCircuit(5, 30*time.Second)}, adapters: map[string]func(context.Context, payments.RouterPaymentRequest, string) payments.ProviderResult{"gateway-card": card.Charge, "gateway-bank": bank.Charge}, breakerEnabled: getenv("APP_CIRCUIT_BREAKER_ENABLED", "true") != "false"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/readyz", s.ready)
@@ -84,12 +82,12 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		payments.JSON(w, 400, map[string]string{"error": "Idempotency-Key is required"})
 		return
 	}
-	var req payments.PaymentRequest
+	var req payments.RouterPaymentRequest
 	if e := payments.Decode(r, &req); e != nil {
 		payments.JSON(w, 400, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	if e := payments.ValidateRequest(req); e != nil {
+	if e := payments.ValidateRouterRequest(req); e != nil {
 		payments.JSON(w, 400, map[string]string{"error": e.Error()})
 		return
 	}
@@ -123,7 +121,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id := newUUID()
 	gateway := gatewayFor(req.Instrument)
-	if _, e = tx.ExecContext(r.Context(), `INSERT INTO payments(id,idempotency_key,request_hash,amount_minor,currency,instrument,participant_id,status,gateway) VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING',$8)`, id, key, hash, req.AmountMinor, strings.ToUpper(req.Currency), req.Instrument, req.ParticipantID, gateway); e != nil {
+	if _, e = tx.ExecContext(r.Context(), `INSERT INTO payments(id,idempotency_key,request_hash,amount_minor,currency,instrument,participant_id,debtor_participant_id,creditor_participant_id,reference,status,gateway) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$11)`, id, key, hash, req.AmountMinor, strings.ToUpper(req.Currency), req.Instrument, req.DebtorParticipantID, req.DebtorParticipantID, req.CreditorParticipantID, req.Reference, gateway); e != nil {
 		payments.JSON(w, 500, map[string]string{"error": "database insert failed"})
 		return
 	}
@@ -140,47 +138,30 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	s.metrics.Count(result.Status == "SUCCEEDED", time.Since(started).Milliseconds())
 	payments.JSON(w, payments.StatusCode(result.Status), result)
 }
-func (s *server) charge(r *http.Request, req payments.PaymentRequest, key, gateway string) payments.PaymentResponse {
+func (s *server) charge(r *http.Request, req payments.RouterPaymentRequest, key, gateway string) payments.PaymentResponse {
 	c := s.circuits[gateway]
-	if c == nil || !c.Allow() {
+	if s.breakerEnabled && (c == nil || !c.Allow()) {
 		return payments.PaymentResponse{Status: "PENDING", Error: "gateway circuit open"}
 	}
-	url := getenv(strings.ToUpper(strings.ReplaceAll(gateway, "-", "_"))+"_URL", "http://"+gateway+":8080") + "/v1/charges"
-	body, _ := json.Marshal(map[string]any{"amount_minor": req.AmountMinor, "currency": req.Currency, "instrument": req.Instrument, "idempotency_key": key})
 	var lastErr error
+	providerContext := payments.ContextWithTraceHeaders(r.Context(), payments.TraceHeaders(r))
 	for attempt := 0; attempt < 2; attempt++ {
-		hr, e := http.NewRequestWithContext(r.Context(), http.MethodPost, url, bytes.NewReader(body))
-		if e != nil {
-			lastErr = e
-			break
-		}
-		hr.Header.Set("Content-Type", "application/json")
-		for k, v := range payments.TraceHeaders(r) {
-			hr.Header[k] = v
-		}
-		resp, e := s.client.Do(hr)
-		if e != nil {
-			lastErr = e
+		result := s.adapters[gateway](providerContext, req, key)
+		if result.Status == "PENDING" {
+			lastErr = fmt.Errorf("%s", result.Error)
 			continue
 		}
-		var gr gatewayResponse
-		_ = json.NewDecoder(resp.Body).Decode(&gr)
-		resp.Body.Close()
-		if resp.StatusCode >= 500 {
-			lastErr = fmt.Errorf("gateway status %d", resp.StatusCode)
-			continue
-		}
-		if resp.StatusCode >= 400 {
+		if s.breakerEnabled {
 			c.Success()
-			return payments.PaymentResponse{Status: "FAILED", ProviderRef: gr.ProviderRef, Error: gr.Error}
 		}
-		c.Success()
-		if gr.Status == "" {
-			gr.Status = "SUCCEEDED"
-		}
-		return payments.PaymentResponse{Status: payments.NormalizeStatus(gr.Status), ProviderRef: gr.ProviderRef, Error: gr.Error}
+		return payments.PaymentResponse{Status: result.Status, ProviderRef: result.ProviderRef, Error: result.Error}
 	}
-	c.Failure()
+	if s.breakerEnabled {
+		c.Failure()
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("provider timeout")
+	}
 	return payments.PaymentResponse{Status: "PENDING", Error: lastErr.Error()}
 }
 func (s *server) get(w http.ResponseWriter, r *http.Request) {
