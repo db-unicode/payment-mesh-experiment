@@ -131,7 +131,7 @@ func expInstance(root, name string) measurement {
 	_, failures, p95, ok := locustStats(filepath.Join(dir, "locust_stats.csv"))
 	injected := fileExists(filepath.Join(dir, "events", "kubectl-delete.out")) || fileExists(filepath.Join(dir, "events", "kubernetes.skip"))
 	pass := ok && injected && failures == 0
-	return measurement{name, "Fallo de una instancia de router", "Locust fallos, p95 e inyección", fmt.Sprintf("fallos=%d; p95=%d ms; inyección=%t", failures, p95, injected), "0 fallos y caída registrada", status(pass, ok && injected), dir}
+	return measurement{name, "Fallo de una instancia de router", "Locust fallos, p95 e inyección", fmt.Sprintf("fallos=%d; p95=%d ms; inyección=%t", failures, p95, injected), "0 respuestas fuera de HTTP 200/202 y caída registrada", status(pass, ok && injected), dir}
 }
 func expDegraded(root, name string) measurement {
 	dir := filepath.Join(root, name)

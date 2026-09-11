@@ -10,6 +10,7 @@ USERS="${LOCUST_USERS:-10}"
 SPAWN="${LOCUST_SPAWN_RATE:-2}"
 DURATION="${LOCUST_DURATION:-120s}"
 FAILURE_AT_SECONDS="${FAILURE_AT_SECONDS:-30}"
+BREAKER_RECOVERY_SECONDS="${BREAKER_RECOVERY_SECONDS:-35}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 ROOT="evidence/runs/$STAMP"
 mkdir -p "$ROOT"
@@ -101,6 +102,8 @@ run_experiment 03-gateway-degraded "Una pasarela degradada no duplica ni convier
 set_behavior "$CARD_GATEWAY" timeout
 api_curl -sS -o "$ROOT/03-gateway-degraded/events/timeout-response.json" -w '%{http_code}\n' -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: timeout-$STAMP" -d '{"debtor_participant_id":"participant-card","creditor_participant_id":"participant-bank","amount_minor":1200,"currency":"COP","reference":"timeout-evidence"}' > "$ROOT/03-gateway-degraded/events/timeout-http-status.txt" 2> "$ROOT/03-gateway-degraded/logs/timeout-request.err"
 set_behavior "$CARD_GATEWAY" success
+printf '%s\n' "$BREAKER_RECOVERY_SECONDS" > "$ROOT/03-gateway-degraded/events/breaker-recovery-wait-seconds.txt"
+sleep "$BREAKER_RECOVERY_SECONDS"
 
 # 4. Two real provider contracts normalize to the common status model.
 write_metadata 04-provider-normalization "Los estados de tarjeta y banco se normalizan al mismo modelo público." "estado del proveedor, estado normalizado" "AUTHORIZED/ACCEPTED se vuelven SUCCEEDED; DECLINED/REJECTED se vuelven FAILED"
