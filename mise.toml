@@ -54,7 +54,7 @@ run = "kubectl apply -k deploy/k8s/overlays/orbstack"
 
 [tasks.kiali-install]
 description = "Install Kiali connected to the experiment Prometheus and Jaeger"
-run = "helm upgrade --install kiali-server kiali-server --repo https://kiali.org/helm-charts --version 2.30.0 --namespace observability --set auth.strategy=anonymous --set external_services.prometheus.url=http://prometheus.observability:9090 --set external_services.tracing.enabled=true --set external_services.tracing.internal_url=http://jaeger.observability:16686 --set external_services.tracing.external_url=http://localhost:16686"
+run = "helm upgrade --install kiali-server kiali-server --repo https://kiali.org/helm-charts --version 2.30.0 --namespace observability --set auth.strategy=anonymous --set external_services.prometheus.url=http://prometheus.observability:9090 --set external_services.tracing.enabled=true --set external_services.tracing.internal_url=http://jaeger.observability:16686 --set external_services.tracing.external_url=http://localhost:16686 --set external_services.tracing.use_grpc=false"
 
 [tasks.kiali-ui]
 description = "Expose Kiali at http://127.0.0.1:20001"
