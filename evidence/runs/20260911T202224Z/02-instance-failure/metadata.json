@@ -1,0 +1,1 @@
+{"experiment":"02-instance-failure","hypothesis":"Eliminar una réplica no interrumpe el servicio.","metric":"disponibilidad, p95, eventos","criterion":"No hay fallos fuera de la ventana de reemplazo","commit":"fd4f56c02b18a36185f815938936cf5439dad010","timestamp":"20260911T202224Z","users":10,"spawn_rate":2,"duration":"120s"}

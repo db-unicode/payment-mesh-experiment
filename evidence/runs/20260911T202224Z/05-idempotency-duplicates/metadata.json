@@ -1,0 +1,1 @@
+{"experiment":"05-idempotency-duplicates","hypothesis":"Diez solicitudes idénticas concurrentes producen un cobro del proveedor.","metric":"effective_charges, respuestas HTTP","criterion":"effective_charges aumenta exactamente en uno","commit":"fd4f56c02b18a36185f815938936cf5439dad010","timestamp":"20260911T202224Z","users":10,"spawn_rate":2,"duration":"120s"}

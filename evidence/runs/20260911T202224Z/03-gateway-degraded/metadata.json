@@ -1,0 +1,1 @@
+{"experiment":"03-gateway-degraded","hypothesis":"Una pasarela degradada no duplica ni convierte incertidumbre en rechazo.","metric":"PENDING, circuit breaker, p95","criterion":"PENDING y evidencia de apertura del circuito","commit":"fd4f56c02b18a36185f815938936cf5439dad010","timestamp":"20260911T202224Z","users":10,"spawn_rate":2,"duration":"120s"}

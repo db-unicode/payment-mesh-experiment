@@ -1,0 +1,1 @@
+{"status":"EXECUTED","result":"Participant DB fault injection was performed only when Kubernetes was available.","evidence":"evidence/runs/20260911T202224Z/06-participant-db-failure"}

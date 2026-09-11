@@ -1,0 +1,291 @@
+apiVersion: v1
+items:
+- apiVersion: security.istio.io/v1
+  kind: PeerAuthentication
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"PeerAuthentication","metadata":{"annotations":{},"name":"default","namespace":"payments"},"spec":{"mtls":{"mode":"STRICT"}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: default
+    namespace: payments
+    resourceVersion: "1740"
+    uid: 2cc7f0aa-2110-40ac-8cfc-2a29cd0e08ee
+  spec:
+    mtls:
+      mode: STRICT
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-router-to-payment-egress","namespace":"istio-system"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/payments/sa/payment-router"]}}],"to":[{"operation":{"ports":["8080"]}}]}],"selector":{"matchLabels":{"istio":"egressgateway"}}}}
+    creationTimestamp: "2026-09-11T01:11:54Z"
+    generation: 3
+    name: allow-router-to-payment-egress
+    namespace: istio-system
+    resourceVersion: "4280"
+    uid: eb317fc1-7acf-4600-9dd4-ac28723dfcff
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/payments/sa/payment-router
+      to:
+      - operation:
+          ports:
+          - "8080"
+    selector:
+      matchLabels:
+        istio: egressgateway
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-ingress-to-operator","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]}}],"to":[{"operation":{"methods":["GET","POST"],"paths":["/v1/payments","/v1/payments/*","/healthz","/readyz"]}}]}],"selector":{"matchLabels":{"app":"payment-operator"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-ingress-to-operator
+    namespace: payments
+    resourceVersion: "1730"
+    uid: f6c1785a-dac1-42ad-bf44-81b6035d9c8c
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account
+      to:
+      - operation:
+          methods:
+          - GET
+          - POST
+          paths:
+          - /v1/payments
+          - /v1/payments/*
+          - /healthz
+          - /readyz
+    selector:
+      matchLabels:
+        app: payment-operator
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-operator-db","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/payments/sa/payment-operator"]}}],"to":[{"operation":{"ports":["5432"]}}]}],"selector":{"matchLabels":{"app":"operator-db"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-operator-db
+    namespace: payments
+    resourceVersion: "1731"
+    uid: f113e787-049b-444c-9776-a2eb5f28b563
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/payments/sa/payment-operator
+      to:
+      - operation:
+          ports:
+          - "5432"
+    selector:
+      matchLabels:
+        app: operator-db
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-operator-health","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]}}],"to":[{"operation":{"methods":["GET"],"paths":["/healthz","/readyz","/metrics"]}}]}],"selector":{"matchLabels":{"app":"payment-operator"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-operator-health
+    namespace: payments
+    resourceVersion: "1732"
+    uid: 5250ba65-c9c0-4a1d-9e1c-e724bc55112a
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account
+      to:
+      - operation:
+          methods:
+          - GET
+          paths:
+          - /healthz
+          - /readyz
+          - /metrics
+    selector:
+      matchLabels:
+        app: payment-operator
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-operator-to-mesh","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/payments/sa/payment-operator"]}}],"to":[{"operation":{"methods":["POST"],"paths":["/internal/v1/payments"]}}]}],"selector":{"matchLabels":{"app":"payment-router"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-operator-to-mesh
+    namespace: payments
+    resourceVersion: "1733"
+    uid: d1eef503-5fdc-4f07-a3e4-de83ab09130a
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/payments/sa/payment-operator
+      to:
+      - operation:
+          methods:
+          - POST
+          paths:
+          - /internal/v1/payments
+    selector:
+      matchLabels:
+        app: payment-router
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-operator-to-participants","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/payments/sa/payment-operator"]}}],"to":[{"operation":{"methods":["GET"],"paths":["/v1/participants/*"]}}]}],"selector":{"matchLabels":{"app":"participant-payment-manager"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-operator-to-participants
+    namespace: payments
+    resourceVersion: "1735"
+    uid: 676833a6-ccb9-4870-8a42-0af1e4de21e0
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/payments/sa/payment-operator
+      to:
+      - operation:
+          methods:
+          - GET
+          paths:
+          - /v1/participants/*
+    selector:
+      matchLabels:
+        app: participant-payment-manager
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-participant-db","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/payments/sa/participant-payment-manager"]}}],"to":[{"operation":{"ports":["5432"]}}]}],"selector":{"matchLabels":{"app":"participant-db"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-participant-db
+    namespace: payments
+    resourceVersion: "1736"
+    uid: 4de1e35f-c7ba-4e37-bf11-1907c1c79e65
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/payments/sa/participant-payment-manager
+      to:
+      - operation:
+          ports:
+          - "5432"
+    selector:
+      matchLabels:
+        app: participant-db
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-prometheus-metrics","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/observability/sa/prometheus"]}}],"to":[{"operation":{"methods":["GET"],"paths":["/metrics"]}}]}]}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-prometheus-metrics
+    namespace: payments
+    resourceVersion: "1737"
+    uid: 2e91571c-1e48-498c-be49-f399a79ef524
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/observability/sa/prometheus
+      to:
+      - operation:
+          methods:
+          - GET
+          paths:
+          - /metrics
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"allow-router-db","namespace":"payments"},"spec":{"action":"ALLOW","rules":[{"from":[{"source":{"principals":["cluster.local/ns/payments/sa/payment-router"]}}],"to":[{"operation":{"ports":["5432"]}}]}],"selector":{"matchLabels":{"app":"router-db"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 1
+    name: allow-router-db
+    namespace: payments
+    resourceVersion: "1738"
+    uid: 159cef21-fa8e-4687-9223-2d724d86e126
+  spec:
+    action: ALLOW
+    rules:
+    - from:
+      - source:
+          principals:
+          - cluster.local/ns/payments/sa/payment-router
+      to:
+      - operation:
+          ports:
+          - "5432"
+    selector:
+      matchLabels:
+        app: router-db
+- apiVersion: security.istio.io/v1
+  kind: AuthorizationPolicy
+  metadata:
+    annotations:
+      kubectl.kubernetes.io/last-applied-configuration: |
+        {"apiVersion":"security.istio.io/v1beta1","kind":"AuthorizationPolicy","metadata":{"annotations":{},"name":"deny-operator-admin","namespace":"payments"},"spec":{"action":"DENY","rules":[{"to":[{"operation":{"paths":["/admin/*"],"ports":["8080"]}}]}],"selector":{"matchLabels":{"app":"payment-operator"}}}}
+    creationTimestamp: "2026-09-11T01:05:24Z"
+    generation: 2
+    name: deny-operator-admin
+    namespace: payments
+    resourceVersion: "2226"
+    uid: 0743600e-47ba-4c73-b710-0d879a4edff2
+  spec:
+    action: DENY
+    rules:
+    - to:
+      - operation:
+          paths:
+          - /admin/*
+          ports:
+          - "8080"
+    selector:
+      matchLabels:
+        app: payment-operator
+kind: List
+metadata:
+  resourceVersion: ""
