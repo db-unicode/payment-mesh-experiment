@@ -1,0 +1,34 @@
+[tools]
+"go" = "1.23.5"
+
+[tasks.test]
+description = "Run Go unit tests"
+run = "go test ./..."
+
+[tasks.build]
+description = "Build all service binaries"
+run = "go build ./cmd/..."
+
+[tasks.up]
+description = "Start local PostgreSQL and gateway mocks"
+run = "docker compose -f deploy/docker/docker-compose.yml up -d --build"
+
+[tasks.down]
+description = "Stop local dependencies"
+run = "docker compose -f deploy/docker/docker-compose.yml down -v"
+
+[tasks.report]
+description = "Generate the reproducible Markdown report"
+run = "go run ./scripts/reportgen"
+
+[tasks.load]
+description = "Run Locust scenarios (requires services)"
+run = "locust -f observability/loadtest/locustfile.py --headless --users ${LOCUST_USERS:-10} --spawn-rate ${LOCUST_SPAWN_RATE:-2} --run-time ${LOCUST_DURATION:-120s} --html evidence/raw/locust.html --csv evidence/raw/locust"
+
+[tasks.k8s-kind]
+description = "Apply base manifests to an existing kind cluster"
+run = "kubectl apply -k deploy/k8s/overlays/kind"
+
+[tasks.k8s-orbstack]
+description = "Apply base manifests to an existing OrbStack cluster"
+run = "kubectl apply -k deploy/k8s/overlays/orbstack"
