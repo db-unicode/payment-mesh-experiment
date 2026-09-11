@@ -7,10 +7,13 @@ spec:
   template:
     metadata: { labels: { app: participant-payment-manager } }
     spec:
+      serviceAccountName: participant-payment-manager
       containers:
         - name: app
           image: payment-participant-manager:dev
           ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, initialDelaySeconds: 3, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 10 }
           env:
             - { name: PARTICIPANT_DATABASE_URL, value: "postgres://participants:participants@participant-db:5432/participants?sslmode=disable" }
 ---
@@ -28,14 +31,18 @@ spec:
   template:
     metadata: { labels: { app: payment-router } }
     spec:
+      serviceAccountName: payment-router
       containers:
         - name: app
           image: payment-router:dev
           ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, initialDelaySeconds: 3, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 10 }
           env:
             - { name: ROUTER_DATABASE_URL, value: "postgres://router:router@router-db:5432/router?sslmode=disable" }
-            - { name: GATEWAY_CARD_URL, value: "https://gateway-card.external.example" }
-            - { name: GATEWAY_BANK_URL, value: "https://gateway-bank.external.example" }
+            - { name: GATEWAY_CARD_URL, value: "http://gateway-card.mesh.local" }
+            - { name: GATEWAY_BANK_URL, value: "http://gateway-bank.mesh.local" }
+            - { name: APP_CIRCUIT_BREAKER_ENABLED, value: "false" }
 ---
 apiVersion: v1
 kind: Service
@@ -51,10 +58,13 @@ spec:
   template:
     metadata: { labels: { app: payment-operator } }
     spec:
+      serviceAccountName: payment-operator
       containers:
         - name: app
           image: payment-operator:dev
           ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, initialDelaySeconds: 3, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 10 }
           env:
             - { name: OPERATOR_DATABASE_URL, value: "postgres://operator:operator@operator-db:5432/operator?sslmode=disable" }
             - { name: PARTICIPANT_MANAGER_URL, value: "http://participant-payment-manager:8080" }

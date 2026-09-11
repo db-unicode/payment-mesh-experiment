@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: payment-operator
+    static_configs: [{ targets: [payment-operator.payments.svc.cluster.local:8080] }]
+  - job_name: payment-router
+    static_configs: [{ targets: [payment-router.payments.svc.cluster.local:8080] }]
+  - job_name: participant-manager
+    static_configs: [{ targets: [participant-payment-manager.payments.svc.cluster.local:8080] }]

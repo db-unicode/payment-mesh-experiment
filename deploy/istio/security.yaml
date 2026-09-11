@@ -15,7 +15,7 @@ spec:
   selector: { matchLabels: { app: payment-operator } }
   action: DENY
   rules:
-    - to: [{ operation: { paths: ["/admin/*"] } }]
+    - to: [{ operation: { ports: ["8080"], paths: ["/admin/*"] } }]
 ---
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -52,3 +52,56 @@ spec:
   rules:
     - from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-operator"] } }]
       to: [{ operation: { methods: ["GET"], paths: ["/v1/participants/*"] } }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata: { name: allow-operator-health, namespace: payments }
+spec:
+  selector: { matchLabels: { app: payment-operator } }
+  action: ALLOW
+  rules: [{ from: [{ source: { principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"] } }], to: [{ operation: { methods: ["GET"], paths: ["/healthz", "/readyz", "/metrics"] } }] }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata: { name: allow-operator-db, namespace: payments }
+spec:
+  selector: { matchLabels: { app: operator-db } }
+  action: ALLOW
+  rules: [{ from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-operator"] } }], to: [{ operation: { ports: ["5432"] } }] }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata: { name: allow-participant-db, namespace: payments }
+spec:
+  selector: { matchLabels: { app: participant-db } }
+  action: ALLOW
+  rules: [{ from: [{ source: { principals: ["cluster.local/ns/payments/sa/participant-payment-manager"] } }], to: [{ operation: { ports: ["5432"] } }] }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata: { name: allow-router-db, namespace: payments }
+spec:
+  selector: { matchLabels: { app: router-db } }
+  action: ALLOW
+  rules: [{ from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-router"] } }], to: [{ operation: { ports: ["5432"] } }] }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata: { name: allow-prometheus-metrics, namespace: payments }
+spec:
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/observability/sa/prometheus"] } }]
+      to: [{ operation: { methods: ["GET"], paths: ["/metrics"] } }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata: { name: allow-router-to-payment-egress, namespace: istio-system }
+spec:
+  selector: { matchLabels: { istio: egressgateway } }
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-router"] } }]
+      # AuthorizationPolicy matches the gateway workload port, not Service port 80.
+      # The Gateway and VirtualServices provide the two-host allowlist.
+      to: [{ operation: { ports: ["8080"] } }]

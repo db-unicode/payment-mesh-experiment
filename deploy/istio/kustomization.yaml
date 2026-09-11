@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - security.yaml
   - egress.yaml
+  - telemetry.yaml

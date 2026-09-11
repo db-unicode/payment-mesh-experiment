@@ -16,6 +16,27 @@ metadata: { name: router-db }
 type: Opaque
 stringData: { POSTGRES_DB: router, POSTGRES_USER: router, POSTGRES_PASSWORD: router }
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: operator-db-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 256Mi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: participant-db-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 256Mi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: router-db-data }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 256Mi } }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: operator-db }
@@ -25,13 +46,14 @@ spec:
   template:
     metadata: { labels: { app: operator-db } }
     spec:
+      serviceAccountName: operator-db
       containers:
         - name: postgres
           image: postgres:16-alpine
           ports: [{ containerPort: 5432 }]
           envFrom: [{ secretRef: { name: operator-db } }]
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
-      volumes: [{ name: data, emptyDir: {} }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: operator-db-data } }]
 ---
 apiVersion: v1
 kind: Service
@@ -47,13 +69,14 @@ spec:
   template:
     metadata: { labels: { app: participant-db } }
     spec:
+      serviceAccountName: participant-db
       containers:
         - name: postgres
           image: postgres:16-alpine
           ports: [{ containerPort: 5432 }]
           envFrom: [{ secretRef: { name: participant-db } }]
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
-      volumes: [{ name: data, emptyDir: {} }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: participant-db-data } }]
 ---
 apiVersion: v1
 kind: Service
@@ -69,13 +92,14 @@ spec:
   template:
     metadata: { labels: { app: router-db } }
     spec:
+      serviceAccountName: router-db
       containers:
         - name: postgres
           image: postgres:16-alpine
           ports: [{ containerPort: 5432 }]
           envFrom: [{ secretRef: { name: router-db } }]
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
-      volumes: [{ name: data, emptyDir: {} }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: router-db-data } }]
 ---
 apiVersion: v1
 kind: Service
