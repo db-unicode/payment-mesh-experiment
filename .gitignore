@@ -1,7 +1,13 @@
 .env
+.venv/
+__pycache__/
+*.pyc
 .DS_Store
 coverage.out
 evidence/raw/
-report.md
+evidence/runs/
+evidence/latest-run
+deploy/docker/certs/
+/report.md
 bin/
 *.log

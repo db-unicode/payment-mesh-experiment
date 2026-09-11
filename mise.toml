@@ -1,9 +1,19 @@
 [tools]
 "go" = "1.23.5"
+"python" = "3.13.15"
+"istioctl" = "1.31.0"
 
 [tasks.test]
 description = "Run Go unit tests"
 run = "go test ./..."
+
+[tasks.doctor]
+description = "Check local prerequisites and contexts"
+run = "scripts/mise-doctor.sh"
+
+[tasks.setup]
+description = "Bootstrap certificates and reproducible Locust environment"
+run = "scripts/setup.sh"
 
 [tasks.build]
 description = "Build all service binaries"
@@ -11,7 +21,7 @@ run = "go build ./cmd/..."
 
 [tasks.up]
 description = "Start local PostgreSQL and gateway mocks"
-run = "docker compose -f deploy/docker/docker-compose.yml up -d --build"
+run = "scripts/bootstrap-certs.sh && docker compose -f deploy/docker/docker-compose.yml up -d --build"
 
 [tasks.down]
 description = "Stop local dependencies"
@@ -21,9 +31,17 @@ run = "docker compose -f deploy/docker/docker-compose.yml down -v"
 description = "Generate the reproducible Markdown report"
 run = "go run ./scripts/reportgen"
 
+[tasks.experiment-all]
+description = "Run all six experiments and write structured evidence"
+run = "scripts/run_experiments.sh"
+
 [tasks.load]
 description = "Run Locust scenarios (requires services)"
 run = "locust -f observability/loadtest/locustfile.py --headless --users ${LOCUST_USERS:-10} --spawn-rate ${LOCUST_SPAWN_RATE:-2} --run-time ${LOCUST_DURATION:-120s} --html evidence/raw/locust.html --csv evidence/raw/locust"
+
+[tasks.observability-up]
+description = "Start Collector, Jaeger, Prometheus and optional Kiali"
+run = "docker compose -f observability/docker-compose.observability.yml up -d"
 
 [tasks.k8s-kind]
 description = "Apply base manifests to an existing kind cluster"

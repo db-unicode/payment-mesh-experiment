@@ -1,24 +1,23 @@
-# Architecture and diagram review
+# Arquitectura y revisión del diagrama
 
-The supplied happy-path diagram captures the domain flow, but it places the client directly beside the bounded context and leaves the external gateway and platform controls implicit. The implementation makes these boundaries explicit:
+El diagrama de happy path muestra el flujo de dominio, pero dejaba implícitos el ingreso, el egress, la seguridad, las bases de datos y la observabilidad. La arquitectura ejecutable queda así:
 
 ```text
-Client -> Istio ingress gateway -> payment-operator -> participant-payment-manager
-                                               \-> payment-router -> Istio egress gateway -> gateway-card
-                                                                                         \-> gateway-bank
-             each workload has a dedicated PostgreSQL database
-             OTel/Envoy telemetry -> Collector -> Jaeger; /metrics -> Prometheus
+Cliente -> Istio ingress -> payment-operator -> participant-payment-manager
+                                           \-> payment-router -> Istio egress -> gateway-card / gateway-bank
+        cada bounded context posee su PostgreSQL; Envoy -> OTel Collector -> Jaeger
 ```
 
-The corrections are deliberate:
+## Correcciones
 
-1. Ingress is the only public entry point in Kubernetes. The operator owns the public contract (`POST /v1/payments`, `GET /v1/payments/{id}`), while router and participant manager expose internal paths.
-2. The router makes the gateway choice from the payment instrument (`card` and `wallet` use `gateway-card`; `bank_transfer`, `bank`, and `pse` use `gateway-bank`). The client never chooses a provider, which prevents a provider-specific concern leaking into the API.
-3. Card and bank gateways are separate mocks outside Kubernetes. This makes egress, TLS origination, timeout and provider-failure scenarios observable and keeps the external-system boundary honest.
-4. There are three PostgreSQL instances: operator orders, participant routing data, and router idempotency/payment state. This preserves bounded-context ownership and lets the experiment stop one datastore without silently sharing state.
-5. Istio provides mTLS STRICT, authorization policies, ingress routing, an egress gateway, TLS origination, and a five-failure/30-second outlier policy. The Go router also has a small local circuit guard so local Compose runs preserve the same pending semantics even without Envoy.
-6. OTel Collector, Jaeger, Prometheus and optional Kiali are platform dependencies. The services expose Prometheus text metrics and forward W3C trace headers; the mesh supplies the complete request spans once sidecars are enabled.
+1. El ingress de Istio es el único punto público en Kubernetes. El operador expone `POST/GET /v1/payments`; router y participantes solo exponen rutas internas.
+2. El contrato público exige `debtor_participant_id`, `creditor_participant_id`, `amount_minor`, `currency` y `reference`. El operador consulta ambos participantes, deriva el instrumento del deudor y crea un `RouterPaymentRequest` interno.
+3. Las pasarelas son mocks externos con contratos distintos: card usa `/v1/card/authorizations` y `AUTHORIZED/DECLINED`; bank usa `/v2/transfers` y `ACCEPTED/REJECTED`. Adapters explícitos normalizan ambos a `SUCCEEDED/FAILED/PENDING`.
+4. Hay tres PostgreSQL independientes: órdenes del operador, participantes y estado/idempotencia del router. No se usan colas ni workers.
+5. En Compose los mocks sirven TLS autofirmado en puertos 8091/8092. En Kubernetes la aplicación usa HTTP hacia ServiceEntries y el egress gateway hace TLS origination separado por host. Los endpoints apuntan a `host.docker.internal`; esto requiere OrbStack o Docker Desktop con esa resolución.
+6. `PeerAuthentication` exige mTLS STRICT. Las `AuthorizationPolicy` son allowlists por workload: ingress→operator, operator→participant/router, cada aplicación→su propio PostgreSQL y router→egress; cualquier workload con una allowlist rechaza lo no incluido. Se mantienen un DENY explícito para `/admin/*` y Kiali es opcional.
+7. Istio Telemetry envía el 100% de las trazas al proveedor OTel. Los servicios conservan métricas Prometheus y propagan `traceparent`, `tracestate` y `x-request-id`.
 
-## Trade-offs
+## Decisiones y límites
 
-`net/http` and a single pgx driver keep the academic implementation portable. PostgreSQL advisory locks make concurrent idempotency deterministic across router replicas. A timeout or 5xx is `PENDING` because the provider may have charged even when the response was lost; only a definitive provider decline is `FAILED`. Reconciliation is intentionally out of scope, so `PENDING` is documented rather than silently retried forever.
+`net/http` y pgx reducen el peso del experimento. PostgreSQL advisory locks hacen determinista la idempotencia concurrente entre réplicas. Un timeout o 5xx queda `PENDING` porque el proveedor pudo haber cobrado; solo un rechazo definitivo queda `FAILED`. El breaker en Go se usa en Compose; en Kubernetes se desactiva para medir el breaker de Istio. El runner nunca inventa evidencia: cluster sin recursos queda `NOT_EXECUTED`.
