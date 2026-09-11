@@ -1,0 +1,23 @@
+# Apply with istioctl install -f this file after installing the Istio CRDs.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata: { name: payment-mesh }
+spec:
+  meshConfig:
+    enableTracing: true
+    defaultConfig:
+      proxyMetadata:
+        ISTIO_META_DNS_CAPTURE: "true"
+      proxyStatsMatcher:
+        inclusionRegexps:
+          - ".*outlier_detection.*"
+          - ".*upstream_rq_pending_overflow.*"
+          - ".*upstream_cx_connect_fail.*"
+    extensionProviders:
+      - name: otel-tracing
+        opentelemetry:
+          service: otel-collector.observability.svc.cluster.local
+          port: 4317
+  components:
+    ingressGateways: [{ name: istio-ingressgateway, enabled: true }]
+    egressGateways: [{ name: istio-egressgateway, enabled: true }]

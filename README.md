@@ -1,28 +1,30 @@
-# Payment Mesh Experiment
+# Experimento Payment Mesh
 
-Experimento académico reproducible para estudiar bounded contexts, idempotencia persistente, selección automática de pasarela, service mesh zero-trust y resiliencia.
+Implementación académica reproducible para estudiar bounded contexts, idempotencia persistente, selección de pasarela, zero-trust con Istio y resiliencia.
+
+## Contrato público
+
+`POST /v1/payments` requiere `Idempotency-Key` y recibe únicamente:
+
+```json
+{"debtor_participant_id":"participant-card","creditor_participant_id":"participant-bank","amount_minor":1200,"currency":"COP","reference":"invoice-1"}
+```
+
+El cliente no envía instrumento ni pasarela. `payment-operator` consulta ambos participantes, deriva el instrumento del deudor y genera un contrato interno separado para `payment-router`.
 
 ## Inicio rápido
 
-Requisitos: Docker Desktop/OrbStack (macOS), Docker Engine (Linux), o Docker Desktop + WSL2 (Windows). `mise` es opcional pero recomendado.
+Requisitos: Docker Desktop/OrbStack (macOS), Docker Engine (Linux) o Docker Desktop con WSL2 (Windows), Go fijado por `mise` y Python 3 para Locust.
 
 ```sh
-mise run up          # PostgreSQL aislado + mocks de pasarela
-mise run test        # pruebas unitarias
-mise run report      # genera report.md a partir de evidencia
+mise run doctor
+mise run setup
+mise run up
+mise run observability-up
+mise run experiment-all
+mise run report
 ```
 
-Para ejecutar en Kubernetes: `mise run k8s-kind` o `mise run k8s-orbstack`; Istio se instala por separado según `docs/running.md`.
-
-La evidencia generada se guarda bajo `evidence/` y el informe reproducible en `report.md` (no se versiona por defecto).
-
-## Servicios
-
-- `payment-operator`: API pública, autorización de la orden y normalización de estado.
-- `participant-payment-manager`: datos de participantes e instrumento de pago.
-- `payment-router`: idempotencia y routing a la pasarela correcta.
-- `gateway-card` / `gateway-bank`: mocks externos en Docker Compose, fuera de Kubernetes.
-
-Cada servicio tiene una base PostgreSQL dedicada. El mesh añade mTLS STRICT, políticas de autorización, egress gateway y circuit breaker.
+El informe queda en [docs/report.md](docs/report.md). La evidencia se organiza en `evidence/runs/<timestamp>/<experimento>/`; nunca se declaran resultados de cluster si los comandos no se ejecutaron.
 
 Consulta [docs/architecture.md](docs/architecture.md), [docs/running.md](docs/running.md) y [docs/experiments.md](docs/experiments.md).

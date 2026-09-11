@@ -10,7 +10,9 @@ import uuid
 from locust import HttpUser, between, task
 
 SCENARIO = os.getenv("SCENARIO", "happy")
-PARTICIPANT = os.getenv("PARTICIPANT_ID", "participant-card")
+DEBTOR = os.getenv("DEBTOR_PARTICIPANT_ID", "participant-card")
+CREDITOR = os.getenv("CREDITOR_PARTICIPANT_ID", "participant-bank")
+INGRESS_HOST = os.getenv("INGRESS_HOST", "")
 
 class PaymentUser(HttpUser):
     wait_time = between(0.05, 0.2)
@@ -23,18 +25,29 @@ class PaymentUser(HttpUser):
         if SCENARIO == "idempotency":
             self.concurrent_same_key()
         else:
-            payload = {"amount_minor": 1200, "currency": "COP", "instrument": "card", "participant_id": PARTICIPANT}
-            with self.client.post("/v1/payments", json=payload, headers={"Idempotency-Key": self.key}, name=SCENARIO, catch_response=True) as response:
-                if SCENARIO == "timeout" and response.status_code not in (200, 202):
-                    response.failure(f"unexpected timeout status {response.status_code}")
-                elif response.status_code not in (200, 202, 422):
-                    response.failure(f"unexpected status {response.status_code}")
+            key = str(uuid.uuid4())
+            payload = {"amount_minor": 1200, "currency": "COP", "debtor_participant_id": DEBTOR, "creditor_participant_id": CREDITOR, "reference": key}
+            headers = {"Idempotency-Key": key}
+            if INGRESS_HOST:
+                headers["Host"] = INGRESS_HOST
+            with self.client.post("/v1/payments", json=payload, headers=headers, name=SCENARIO, catch_response=True) as response:
+                # During an instance crash, a payment that was accepted by the
+                # deleted router but whose response was lost is explicitly
+                # normalized as PENDING. Both 200 and 202 are available,
+                # non-5xx outcomes for the failover experiment.
+                expected = (202,) if SCENARIO in ("degraded", "timeout", "breaker") else ((422,) if SCENARIO == "decline" else ((200, 202) if SCENARIO == "load" else (200,)))
+                if response.status_code not in expected:
+                    response.failure(f"unexpected status {response.status_code}; expected {expected}")
 
     def concurrent_same_key(self):
-        payload = {"amount_minor": 1200, "currency": "COP", "instrument": "card", "participant_id": PARTICIPANT}
+        key = str(uuid.uuid4())
+        payload = {"amount_minor": 1200, "currency": "COP", "debtor_participant_id": DEBTOR, "creditor_participant_id": CREDITOR, "reference": key}
         results = []
         def send():
-            results.append(self.client.post("/v1/payments", json=payload, headers={"Idempotency-Key": self.key}, name="idempotency", catch_response=False).status_code)
+            headers = {"Idempotency-Key": key}
+            if INGRESS_HOST:
+                headers["Host"] = INGRESS_HOST
+            results.append(self.client.post("/v1/payments", json=payload, headers=headers, name="idempotency", catch_response=False).status_code)
         threads = [threading.Thread(target=send) for _ in range(10)]
         for thread in threads: thread.start()
         for thread in threads: thread.join()

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -79,7 +81,11 @@ func (s *server) routing(w http.ResponseWriter, r *http.Request) {
 	var p payments.Participant
 	err := s.db.SQL.QueryRowContext(r.Context(), `SELECT id,instrument,gateway,active FROM participants WHERE id=$1`, id).Scan(&p.ID, &p.Instrument, &p.Gateway, &p.Active)
 	if err != nil {
-		payments.JSON(w, 404, map[string]string{"error": "participant not found"})
+		if errors.Is(err, sql.ErrNoRows) {
+			payments.JSON(w, 404, map[string]string{"error": "participant not found"})
+		} else {
+			payments.JSON(w, 503, map[string]string{"error": "participant database unavailable"})
+		}
 		return
 	}
 	if !p.Active {

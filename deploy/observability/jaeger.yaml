@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: jaeger }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: jaeger } }
+  template:
+    metadata: { labels: { app: jaeger } }
+    spec:
+      containers:
+        - name: jaeger
+          image: cr.jaegertracing.io/jaegertracing/jaeger:2.20.0
+          ports: [{ name: otlp, containerPort: 4317 }, { name: ui, containerPort: 16686 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: jaeger }
+spec: { selector: { app: jaeger }, ports: [{ name: grpc-otlp, port: 4317 }, { name: http-ui, port: 16686 }] }

@@ -1,0 +1,1 @@
+{"status":"EXECUTED","result":"Pod-failure command and load were run only when Kubernetes was available.","evidence":"evidence/runs/20260911T202224Z/02-instance-failure"}

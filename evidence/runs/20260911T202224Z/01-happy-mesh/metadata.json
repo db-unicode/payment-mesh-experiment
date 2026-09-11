@@ -1,0 +1,1 @@
+{"experiment":"01-happy-mesh","hypothesis":"Una orden válida atraviesa ingress, mTLS y tracing.","metric":"estado, p95, trazas","criterion":"SUCCEEDED y existe una traza","commit":"fd4f56c02b18a36185f815938936cf5439dad010","timestamp":"20260911T202224Z","users":10,"spawn_rate":2,"duration":"120s"}

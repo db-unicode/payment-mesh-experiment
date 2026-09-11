@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: payment-operator
+    static_configs: [{ targets: [payment-operator.payments.svc.cluster.local:8080] }]
+  - job_name: payment-router
+    static_configs: [{ targets: [payment-router.payments.svc.cluster.local:8080] }]
+  - job_name: participant-manager
+    static_configs: [{ targets: [participant-payment-manager.payments.svc.cluster.local:8080] }]
+  - job_name: istio-mesh
+    honor_labels: true
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - action: keep
+        source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        regex: "true"
+      - action: replace
+        source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        target_label: __metrics_path__
+        regex: "(.+)"
+      - action: replace
+        source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        target_label: __address__
+        regex: "([^:]+)(?::\\d+)?;(\\d+)"
+        replacement: "$1:$2"
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - action: replace
+        source_labels: [__meta_kubernetes_namespace]
+        target_label: kubernetes_namespace
+      - action: replace
+        source_labels: [__meta_kubernetes_pod_name]
+        target_label: kubernetes_pod_name

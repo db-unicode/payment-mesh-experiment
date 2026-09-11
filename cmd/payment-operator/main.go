@@ -32,7 +32,9 @@ func main() {
 	if e = db.EnsureOperator(ctx); e != nil {
 		log.Fatal(e)
 	}
-	s := &server{db: db, client: &http.Client{Timeout: 3 * time.Second}}
+	// The operator budget must exceed the router's two bounded provider attempts
+	// so uncertain provider failures can be normalized to PENDING instead of 503.
+	s := &server{db: db, client: &http.Client{Timeout: 6 * time.Second}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/readyz", s.ready)
@@ -76,7 +78,7 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		payments.JSON(w, 400, map[string]string{"error": "Idempotency-Key is required"})
 		return
 	}
-	var req payments.PaymentRequest
+	var req payments.PublicPaymentRequest
 	if e := payments.Decode(r, &req); e != nil {
 		payments.JSON(w, 400, map[string]string{"error": "invalid JSON"})
 		return
@@ -99,43 +101,38 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 	var out payments.PaymentResponse
 	var oldHash string
 	var created time.Time
-	e = tx.QueryRowContext(r.Context(), `SELECT id::text,idempotency_key,request_hash,status,created_at FROM orders WHERE idempotency_key=$1`, key).Scan(&out.ID, &out.IdempotencyKey, &oldHash, &out.Status, &created)
+	e = tx.QueryRowContext(r.Context(), `SELECT id::text,idempotency_key,request_hash,status,COALESCE(gateway,''),COALESCE(provider_ref,''),COALESCE(error,''),created_at FROM orders WHERE idempotency_key=$1`, key).Scan(&out.ID, &out.IdempotencyKey, &oldHash, &out.Status, &out.Gateway, &out.ProviderRef, &out.Error, &created)
 	if e == nil {
 		if oldHash != hash {
 			payments.JSON(w, 409, map[string]string{"error": "idempotency key already used with another payload"})
 			return
 		}
 		out.CreatedAt = created.UTC().Format(time.RFC3339Nano)
-		if out.Status == "SUCCEEDED" {
-			payments.JSON(w, 200, out)
-		} else {
-			payments.JSON(w, 202, out)
-		}
+		payments.JSON(w, payments.StatusCode(out.Status), out)
 		return
 	}
 	if !errors.Is(e, sql.ErrNoRows) {
 		payments.JSON(w, 500, map[string]string{"error": "database read failed"})
 		return
 	}
-	participantURL := getenv("PARTICIPANT_MANAGER_URL", "http://participant-payment-manager:8080") + "/v1/participants/" + req.ParticipantID
-	pr, e := s.client.Get(participantURL)
+	traceContext := payments.ContextWithTraceHeaders(r.Context(), payments.TraceHeaders(r))
+	debtor, e := s.participant(traceContext, req.DebtorParticipantID)
 	if e != nil {
-		payments.JSON(w, 503, map[string]string{"error": "participant manager unavailable"})
+		payments.JSON(w, 503, map[string]string{"error": e.Error()})
 		return
 	}
-	defer pr.Body.Close()
-	if pr.StatusCode != 200 {
-		b, _ := io.ReadAll(io.LimitReader(pr.Body, 4096))
-		payments.JSON(w, pr.StatusCode, map[string]string{"error": strings.TrimSpace(string(b))})
+	creditor, e := s.participant(traceContext, req.CreditorParticipantID)
+	if e != nil {
+		payments.JSON(w, 503, map[string]string{"error": e.Error()})
 		return
 	}
-	var participant payments.Participant
-	if e = json.NewDecoder(pr.Body).Decode(&participant); e != nil {
-		payments.JSON(w, 502, map[string]string{"error": "invalid participant response"})
+	if !debtor.Active || !creditor.Active {
+		payments.JSON(w, 409, map[string]string{"error": "participant inactive"})
 		return
 	}
+	internal := payments.RouterPaymentRequest{DebtorParticipantID: req.DebtorParticipantID, CreditorParticipantID: req.CreditorParticipantID, AmountMinor: req.AmountMinor, Currency: req.Currency, Reference: req.Reference, Instrument: debtor.Instrument}
 	routerURL := getenv("ROUTER_URL", "http://payment-router:8080") + "/internal/v1/payments"
-	payload, _ := json.Marshal(req)
+	payload, _ := json.Marshal(internal)
 	rr, e := http.NewRequestWithContext(r.Context(), http.MethodPost, routerURL, bytes.NewReader(payload))
 	if e != nil {
 		payments.JSON(w, 500, map[string]string{"error": "could not build router request"})
@@ -157,18 +154,48 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out.IdempotencyKey = key
-	out.CreatedAt = payments.Now()
-	_, e = tx.ExecContext(r.Context(), `INSERT INTO orders(id,idempotency_key,request_hash,payment_id,status) VALUES($1,$2,$3,$4,$5)`, out.ID, key, hash, out.ID, out.Status)
+	e = tx.QueryRowContext(r.Context(), `INSERT INTO orders(id,idempotency_key,request_hash,payment_id,status,gateway,provider_ref,error) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`, out.ID, key, hash, out.ID, out.Status, out.Gateway, out.ProviderRef, out.Error).Scan(&created)
 	if e != nil {
 		payments.JSON(w, 500, map[string]string{"error": "could not persist order"})
 		return
 	}
+	out.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 	if e = tx.Commit(); e != nil {
 		payments.JSON(w, 500, map[string]string{"error": "database commit failed"})
 		return
 	}
 	s.metrics.Count(out.Status == "SUCCEEDED", time.Since(started).Milliseconds())
 	payments.JSON(w, resp.StatusCode, out)
+}
+
+func (s *server) participant(ctx context.Context, id string) (payments.Participant, error) {
+	var p payments.Participant
+	url := getenv("PARTICIPANT_MANAGER_URL", "http://participant-payment-manager:8080") + "/v1/participants/" + id
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return p, err
+	}
+	for name, values := range payments.TraceHeadersFromContext(ctx) {
+		req.Header[name] = values
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return p, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var upstreamError struct {
+			Error string `json:"error"`
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&upstreamError) == nil && upstreamError.Error != "" {
+			return p, errors.New(upstreamError.Error)
+		}
+		return p, errors.New("participant lookup failed")
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		return p, errors.New("invalid participant response")
+	}
+	return p, nil
 }
 func (s *server) get(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

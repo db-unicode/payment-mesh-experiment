@@ -9,12 +9,25 @@ import (
 	"time"
 )
 
-type PaymentRequest struct {
-	AmountMinor   int64  `json:"amount_minor"`
-	Currency      string `json:"currency"`
-	Instrument    string `json:"instrument"`
-	ParticipantID string `json:"participant_id"`
-	Description   string `json:"description,omitempty"`
+// PublicPaymentRequest is the stable public contract. Instrument and gateway
+// are deliberately absent: routing is derived from the debtor participant.
+type PublicPaymentRequest struct {
+	DebtorParticipantID   string `json:"debtor_participant_id"`
+	CreditorParticipantID string `json:"creditor_participant_id"`
+	AmountMinor           int64  `json:"amount_minor"`
+	Currency              string `json:"currency"`
+	Reference             string `json:"reference"`
+}
+
+// RouterPaymentRequest is an internal contract created by the operator after
+// resolving both participants.
+type RouterPaymentRequest struct {
+	DebtorParticipantID   string `json:"debtor_participant_id"`
+	CreditorParticipantID string `json:"creditor_participant_id"`
+	AmountMinor           int64  `json:"amount_minor"`
+	Currency              string `json:"currency"`
+	Reference             string `json:"reference"`
+	Instrument            string `json:"instrument"`
 }
 
 type PaymentResponse struct {
@@ -34,7 +47,7 @@ type Participant struct {
 	Active     bool   `json:"active"`
 }
 
-func RequestHash(req PaymentRequest) (string, error) {
+func RequestHash(req any) (string, error) {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return "", err
@@ -43,7 +56,26 @@ func RequestHash(req PaymentRequest) (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
-func ValidateRequest(req PaymentRequest) error {
+func ValidateRequest(req PublicPaymentRequest) error {
+	if req.AmountMinor <= 0 {
+		return fmt.Errorf("amount_minor must be positive")
+	}
+	if len(req.Currency) != 3 {
+		return fmt.Errorf("currency must be ISO 4217")
+	}
+	if strings.TrimSpace(req.DebtorParticipantID) == "" {
+		return fmt.Errorf("debtor_participant_id is required")
+	}
+	if strings.TrimSpace(req.CreditorParticipantID) == "" {
+		return fmt.Errorf("creditor_participant_id is required")
+	}
+	if strings.TrimSpace(req.Reference) == "" {
+		return fmt.Errorf("reference is required")
+	}
+	return nil
+}
+
+func ValidateRouterRequest(req RouterPaymentRequest) error {
 	if req.AmountMinor <= 0 {
 		return fmt.Errorf("amount_minor must be positive")
 	}
@@ -53,8 +85,11 @@ func ValidateRequest(req PaymentRequest) error {
 	if strings.TrimSpace(req.Instrument) == "" {
 		return fmt.Errorf("instrument is required")
 	}
-	if strings.TrimSpace(req.ParticipantID) == "" {
-		return fmt.Errorf("participant_id is required")
+	if strings.TrimSpace(req.DebtorParticipantID) == "" || strings.TrimSpace(req.CreditorParticipantID) == "" {
+		return fmt.Errorf("both participant IDs are required")
+	}
+	if strings.TrimSpace(req.Reference) == "" {
+		return fmt.Errorf("reference is required")
 	}
 	return nil
 }

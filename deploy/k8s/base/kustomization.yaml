@@ -4,5 +4,6 @@ namespace: payments
 resources:
   - namespace.yaml
   - postgres.yaml
+  - serviceaccounts.yaml
   - services.yaml
   - istio.yaml

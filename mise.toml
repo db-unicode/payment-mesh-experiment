@@ -1,9 +1,20 @@
 [tools]
 "go" = "1.23.5"
+"python" = "3.13.15"
+"istioctl" = "1.31.0"
+"helm" = "3.22.0"
 
 [tasks.test]
 description = "Run Go unit tests"
 run = "go test ./..."
+
+[tasks.doctor]
+description = "Check local prerequisites and contexts"
+run = "scripts/mise-doctor.sh"
+
+[tasks.setup]
+description = "Bootstrap certificates and reproducible Locust environment"
+run = "scripts/setup.sh"
 
 [tasks.build]
 description = "Build all service binaries"
@@ -11,7 +22,7 @@ run = "go build ./cmd/..."
 
 [tasks.up]
 description = "Start local PostgreSQL and gateway mocks"
-run = "docker compose -f deploy/docker/docker-compose.yml up -d --build"
+run = "scripts/bootstrap-certs.sh && docker compose -f deploy/docker/docker-compose.yml up -d --build"
 
 [tasks.down]
 description = "Stop local dependencies"
@@ -21,9 +32,17 @@ run = "docker compose -f deploy/docker/docker-compose.yml down -v"
 description = "Generate the reproducible Markdown report"
 run = "go run ./scripts/reportgen"
 
+[tasks.experiment-all]
+description = "Run all six experiments and write structured evidence"
+run = "scripts/run_experiments.sh"
+
 [tasks.load]
 description = "Run Locust scenarios (requires services)"
 run = "locust -f observability/loadtest/locustfile.py --headless --users ${LOCUST_USERS:-10} --spawn-rate ${LOCUST_SPAWN_RATE:-2} --run-time ${LOCUST_DURATION:-120s} --html evidence/raw/locust.html --csv evidence/raw/locust"
+
+[tasks.observability-up]
+description = "Start Collector, Jaeger, Prometheus and optional Kiali"
+run = "docker compose -f observability/docker-compose.observability.yml up -d"
 
 [tasks.k8s-kind]
 description = "Apply base manifests to an existing kind cluster"
@@ -32,3 +51,11 @@ run = "kubectl apply -k deploy/k8s/overlays/kind"
 [tasks.k8s-orbstack]
 description = "Apply base manifests to an existing OrbStack cluster"
 run = "kubectl apply -k deploy/k8s/overlays/orbstack"
+
+[tasks.kiali-install]
+description = "Install Kiali connected to the experiment Prometheus and Jaeger"
+run = "helm upgrade --install kiali-server kiali-server --repo https://kiali.org/helm-charts --version 2.30.0 --namespace observability --set auth.strategy=anonymous --set external_services.prometheus.url=http://prometheus.observability:9090 --set external_services.tracing.enabled=true --set external_services.tracing.internal_url=http://jaeger.observability:16686 --set external_services.tracing.external_url=http://localhost:16686 --set external_services.tracing.use_grpc=false"
+
+[tasks.kiali-ui]
+description = "Expose Kiali at http://127.0.0.1:20001"
+run = "kubectl port-forward -n observability service/kiali 20001:20001"

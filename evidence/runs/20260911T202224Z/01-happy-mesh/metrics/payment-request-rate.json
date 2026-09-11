@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"payment-router"},"value":[1789158265.174,"3216.0925599999996"]},{"metric":{"job":"participant-manager"},"value":[1789158265.174,"146.0283984509936"]},{"metric":{"job":"payment-operator"},"value":[1789158265.174,"72.92727272727272"]}]}}

@@ -11,77 +11,180 @@ import (
 	"time"
 )
 
-type charge struct {
-	AmountMinor    int64  `json:"amount_minor"`
-	Currency       string `json:"currency"`
-	Instrument     string `json:"instrument"`
-	IdempotencyKey string `json:"idempotency_key"`
+type cardRequest struct {
+	AmountMinor int64  `json:"amount_minor"`
+	Currency    string `json:"currency"`
+	Reference   string `json:"reference"`
+	RequestID   string `json:"request_id"`
 }
-type result struct {
-	Status      string `json:"status"`
-	ProviderRef string `json:"provider_ref,omitempty"`
-	Error       string `json:"error,omitempty"`
+type bankRequest struct {
+	AmountMinor int64  `json:"amount_minor"`
+	Currency    string `json:"currency"`
+	Reference   string `json:"reference"`
+	TransferID  string `json:"transfer_id"`
+}
+type cardResult struct {
+	State           string `json:"state"`
+	AuthorizationID string `json:"authorization_id,omitempty"`
+	Message         string `json:"message,omitempty"`
+}
+type bankResult struct {
+	Decision   string `json:"decision"`
+	TransferID string `json:"transfer_id,omitempty"`
+	Message    string `json:"message,omitempty"`
+}
+type stats struct {
+	Attempts         int `json:"attempts"`
+	EffectiveCharges int `json:"effective_charges"`
 }
 
 var state = struct {
 	sync.Mutex
-	charges map[string]result
-}{charges: map[string]result{}}
+	card  map[string]cardResult
+	bank  map[string]bankResult
+	stats stats
+}{card: map[string]cardResult{}, bank: map[string]bankResult{}}
 
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health)
 	mux.HandleFunc("/admin/behavior", behavior)
-	mux.HandleFunc("/v1/charges", chargeHandler)
+	mux.HandleFunc("/stats", statsHandler)
+	mux.HandleFunc("/v1/card/authorizations", cardAuthorization)
+	mux.HandleFunc("/v2/transfers", bankTransfer)
 	addr := getenv("HTTP_ADDR", ":8080")
 	log.Printf("gateway mock listening on %s (%s)", addr, getenv("GATEWAY_NAME", "gateway"))
-	log.Fatal(http.ListenAndServe(addr, mux))
+	if cert, key := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE"); cert != "" && key != "" {
+		log.Fatal(http.ListenAndServeTLS(addr, cert, key, mux))
+	} else {
+		log.Fatal(http.ListenAndServe(addr, mux))
+	}
 }
-func health(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(200)
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
-}
-func chargeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		w.WriteHeader(405)
+func health(w http.ResponseWriter, _ *http.Request) { write(w, 200, map[string]string{"status": "ok"}) }
+func cardAuthorization(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		write(w, 405, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var req charge
-	if json.NewDecoder(r.Body).Decode(&req) != nil || req.IdempotencyKey == "" {
-		write(w, 400, result{Status: "FAILED", Error: "invalid request"})
+	var req cardRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.RequestID == "" {
+		write(w, 400, map[string]string{"error": "request_id is required"})
 		return
 	}
 	state.Lock()
-	if old, ok := state.charges[req.IdempotencyKey]; ok {
+	state.stats.Attempts++
+	if old, ok := state.card[req.RequestID]; ok {
 		state.Unlock()
 		write(w, 200, old)
 		return
 	}
 	state.Unlock()
+	if waitProvider(r) {
+		return
+	}
 	behavior := getenv("GATEWAY_BEHAVIOR", "success")
-	delay, _ := strconv.Atoi(getenv("GATEWAY_DELAY_MS", "0"))
-	if behavior == "timeout" {
-		time.Sleep(10 * time.Second)
-	} else if delay > 0 {
-		time.Sleep(time.Duration(delay) * time.Millisecond)
-	}
-	switch behavior {
-	case "error":
-		write(w, 500, result{Status: "PENDING", Error: "simulated provider error"})
-		return
-	case "decline":
-		write(w, 402, result{Status: "FAILED", Error: "simulated provider decline"})
+	if behavior == "error" {
+		write(w, 503, map[string]string{"message": "provider unavailable"})
 		return
 	}
-	res := result{Status: "SUCCEEDED", ProviderRef: fmt.Sprintf("%s-%d", getenv("GATEWAY_NAME", "gateway"), time.Now().UnixNano())}
+	if behavior == "decline" {
+		res := cardResult{State: "DECLINED", Message: "card authorization declined"}
+		state.Lock()
+		if old, ok := state.card[req.RequestID]; ok {
+			state.Unlock()
+			write(w, 200, old)
+			return
+		}
+		state.card[req.RequestID] = res
+		state.stats.EffectiveCharges++
+		state.Unlock()
+		write(w, 200, res)
+		return
+	}
+	res := cardResult{State: "AUTHORIZED", AuthorizationID: fmt.Sprintf("card-auth-%d", time.Now().UnixNano())}
 	state.Lock()
-	state.charges[req.IdempotencyKey] = res
+	if old, ok := state.card[req.RequestID]; ok {
+		state.Unlock()
+		write(w, 200, old)
+		return
+	}
+	state.card[req.RequestID] = res
+	state.stats.EffectiveCharges++
 	state.Unlock()
 	write(w, 200, res)
 }
+func bankTransfer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		write(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req bankRequest
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.TransferID == "" {
+		write(w, 400, map[string]string{"error": "transfer_id is required"})
+		return
+	}
+	state.Lock()
+	state.stats.Attempts++
+	if old, ok := state.bank[req.TransferID]; ok {
+		state.Unlock()
+		write(w, 200, old)
+		return
+	}
+	state.Unlock()
+	if waitProvider(r) {
+		return
+	}
+	behavior := getenv("GATEWAY_BEHAVIOR", "success")
+	if behavior == "error" {
+		write(w, 503, map[string]string{"message": "bank provider unavailable"})
+		return
+	}
+	if behavior == "decline" {
+		res := bankResult{Decision: "REJECTED", Message: "bank transfer rejected"}
+		state.Lock()
+		if old, ok := state.bank[req.TransferID]; ok {
+			state.Unlock()
+			write(w, 200, old)
+			return
+		}
+		state.bank[req.TransferID] = res
+		state.stats.EffectiveCharges++
+		state.Unlock()
+		write(w, 200, res)
+		return
+	}
+	res := bankResult{Decision: "ACCEPTED", TransferID: fmt.Sprintf("bank-transfer-%d", time.Now().UnixNano())}
+	state.Lock()
+	if old, ok := state.bank[req.TransferID]; ok {
+		state.Unlock()
+		write(w, 200, old)
+		return
+	}
+	state.bank[req.TransferID] = res
+	state.stats.EffectiveCharges++
+	state.Unlock()
+	write(w, 200, res)
+}
+func waitProvider(r *http.Request) bool {
+	delay, _ := strconv.Atoi(getenv("GATEWAY_DELAY_MS", "0"))
+	if getenv("GATEWAY_BEHAVIOR", "success") == "timeout" {
+		delay = 10000
+	}
+	if delay <= 0 {
+		return false
+	}
+	timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return false
+	case <-r.Context().Done():
+		return true
+	}
+}
 func behavior(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		w.WriteHeader(405)
+	if r.Method != http.MethodPost {
+		write(w, 405, map[string]string{"error": "method not allowed"})
 		return
 	}
 	var b struct {
@@ -94,7 +197,12 @@ func behavior(w http.ResponseWriter, r *http.Request) {
 	}
 	os.Setenv("GATEWAY_BEHAVIOR", b.Behavior)
 	os.Setenv("GATEWAY_DELAY_MS", strconv.Itoa(b.DelayMs))
-	write(w, 200, map[string]string{"behavior": b.Behavior})
+	write(w, 200, b)
+}
+func statsHandler(w http.ResponseWriter, _ *http.Request) {
+	state.Lock()
+	defer state.Unlock()
+	write(w, 200, state.stats)
 }
 func write(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
