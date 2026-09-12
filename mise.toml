@@ -8,6 +8,10 @@
 description = "Run Go unit tests"
 run = "go test ./..."
 
+[tasks.test-integration]
+description = "Run PostgreSQL idempotency and replay integration tests in an isolated Docker network"
+run = "scripts/test-integration.sh"
+
 [tasks.doctor]
 description = "Check local prerequisites and contexts"
 run = "scripts/mise-doctor.sh"
@@ -22,11 +26,15 @@ run = "go build ./cmd/..."
 
 [tasks.up]
 description = "Start local PostgreSQL and gateway mocks"
-run = "scripts/bootstrap-certs.sh && docker compose -f deploy/docker/docker-compose.yml up -d --build"
+run = "scripts/bootstrap-certs.sh && scripts/bootstrap-secrets.sh && docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d --build"
+
+[tasks.k8s-secrets]
+description = "Create the local-only Kubernetes gateway auth secret"
+run = "scripts/bootstrap-secrets.sh --kubernetes"
 
 [tasks.down]
 description = "Stop local dependencies"
-run = "docker compose -f deploy/docker/docker-compose.yml down -v"
+run = "docker compose --env-file .env -f deploy/docker/docker-compose.yml down"
 
 [tasks.report]
 description = "Generate the reproducible Markdown report"

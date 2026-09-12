@@ -62,9 +62,19 @@ spec:
   hosts: [gateway-card.mesh.local]
   gateways: [mesh, payment-egress]
   http:
-    - match: [{ gateways: [mesh], port: 80 }]
+    - match:
+        - gateways: [mesh]
+          port: 80
+          uri: { prefix: /v1/card/authorizations }
       route: [{ destination: { host: istio-egressgateway.istio-system.svc.cluster.local, subset: card, port: { number: 80 } } }]
-    - match: [{ gateways: [payment-egress], port: 80 }]
+      # Provider POSTs carry the idempotency key. Keep retries bounded and
+      # limited to transport/provider-unavailable failures.
+      timeout: 2s
+      retries: { attempts: 2, perTryTimeout: 900ms, retryOn: "connect-failure,refused-stream,reset,unavailable,5xx" }
+    - match:
+        - gateways: [payment-egress]
+          port: 80
+          uri: { prefix: /v1/card/authorizations }
       route: [{ destination: { host: gateway-card.mesh.local, port: { number: 443 } } }]
 ---
 apiVersion: networking.istio.io/v1beta1
@@ -74,9 +84,17 @@ spec:
   hosts: [gateway-bank.mesh.local]
   gateways: [mesh, payment-egress]
   http:
-    - match: [{ gateways: [mesh], port: 80 }]
+    - match:
+        - gateways: [mesh]
+          port: 80
+          uri: { prefix: /v2/transfers }
       route: [{ destination: { host: istio-egressgateway.istio-system.svc.cluster.local, subset: bank, port: { number: 80 } } }]
-    - match: [{ gateways: [payment-egress], port: 80 }]
+      timeout: 2s
+      retries: { attempts: 2, perTryTimeout: 900ms, retryOn: "connect-failure,refused-stream,reset,unavailable,5xx" }
+    - match:
+        - gateways: [payment-egress]
+          port: 80
+          uri: { prefix: /v2/transfers }
       route: [{ destination: { host: gateway-bank.mesh.local, port: { number: 443 } } }]
 ---
 apiVersion: networking.istio.io/v1beta1

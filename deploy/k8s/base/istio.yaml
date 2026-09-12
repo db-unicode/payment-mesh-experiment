@@ -17,14 +17,39 @@ spec:
     - route: [{ destination: { host: payment-operator, port: { number: 8080 } } }]
 ---
 apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata: { name: payment-router-resilience }
+spec:
+  host: payment-router
+  trafficPolicy:
+    connectionPool: { http: { http1MaxPendingRequests: 100, maxRequestsPerConnection: 20 } }
+    outlierDetection: { consecutive5xxErrors: 5, interval: 5s, baseEjectionTime: 30s, maxEjectionPercent: 50 }
+---
+apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
-metadata: { name: payment-router-retries }
+metadata: { name: payment-router-failover }
 spec:
   hosts: [payment-router]
   gateways: [mesh]
   http:
-    - route: [{ destination: { host: payment-router, port: { number: 8080 } } }]
-      retries:
-        attempts: 3
-        perTryTimeout: 2s
-        retryOn: reset,connect-failure,refused-stream,unavailable,5xx
+    - match: [{ port: 8080, method: { exact: GET }, uri: { exact: /metrics } }]
+      route: [{ destination: { host: payment-router, port: { number: 8080 } } }]
+    - match: [{ port: 8080, method: { exact: POST }, uri: { prefix: /internal/v1/payments } }]
+      route: [{ destination: { host: payment-router, port: { number: 8080 } } }]
+      timeout: 5.5s
+      # Only transport failures are retried; the idempotency key makes the
+      # bounded POST retry safe if a connection resets after dispatch.
+      retries: { attempts: 2, perTryTimeout: 5s, retryOn: "connect-failure,refused-stream,reset" }
+    - match: [{ port: 8080, method: { exact: GET }, uri: { prefix: /v1/payments/ } }]
+      route: [{ destination: { host: payment-router, port: { number: 8080 } } }]
+      timeout: 2s
+      retries: { attempts: 2, perTryTimeout: 900ms, retryOn: "connect-failure,refused-stream,reset" }
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata: { name: participant-manager-resilience }
+spec:
+  host: participant-payment-manager
+  trafficPolicy:
+    connectionPool: { http: { http1MaxPendingRequests: 100, maxRequestsPerConnection: 20 } }
+    outlierDetection: { consecutive5xxErrors: 5, interval: 5s, baseEjectionTime: 30s, maxEjectionPercent: 100 }
