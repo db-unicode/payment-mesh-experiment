@@ -7,3 +7,15 @@ spec:
       randomSamplingPercentage: 100.0
       customTags:
         experiment: { literal: { value: payment-mesh } }
+---
+# Gateways are installed in istio-system, so give the ingress/egress hops the
+# same explicit provider and sampling policy as the payment workloads.
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata: { name: payment-gateway-tracing, namespace: istio-system }
+spec:
+  tracing:
+    - providers: [{ name: otel-tracing }]
+      randomSamplingPercentage: 100.0
+      customTags:
+        experiment: { literal: { value: payment-mesh } }

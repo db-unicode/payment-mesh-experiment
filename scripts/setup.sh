@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 scripts/bootstrap-certs.sh
+scripts/bootstrap-secrets.sh
 if command -v python3 >/dev/null 2>&1; then
   python3 -m venv .venv
   .venv/bin/python -m pip install --upgrade pip

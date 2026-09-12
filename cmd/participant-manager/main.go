@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -56,9 +57,10 @@ func openWithRetry(ctx context.Context, name string) (*payments.DB, error) {
 	return nil, last
 }
 func seed(ctx context.Context, db *payments.DB) error {
-	_, err := db.SQL.ExecContext(ctx, `INSERT INTO participants (id,instrument,gateway) VALUES
-	('participant-card','card','gateway-card'),('participant-bank','bank_transfer','gateway-bank'),('participant-wallet','wallet','gateway-card')
-	ON CONFLICT (id) DO NOTHING`)
+	roles := `["debtor","creditor"]`
+	_, err := db.SQL.ExecContext(ctx, `INSERT INTO participants (id,instrument,gateway,roles) VALUES
+	('participant-card','card','gateway-card',$1::jsonb),('participant-bank','bank_transfer','gateway-bank',$1::jsonb),('participant-wallet','wallet','gateway-card',$1::jsonb)
+	ON CONFLICT (id) DO UPDATE SET roles=CASE WHEN participants.roles='[]'::jsonb THEN EXCLUDED.roles ELSE participants.roles END`, roles)
 	return err
 }
 func (s *server) health(w http.ResponseWriter, _ *http.Request) {
@@ -79,13 +81,18 @@ func (s *server) routing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p payments.Participant
-	err := s.db.SQL.QueryRowContext(r.Context(), `SELECT id,instrument,gateway,active FROM participants WHERE id=$1`, id).Scan(&p.ID, &p.Instrument, &p.Gateway, &p.Active)
+	var roles []byte
+	err := s.db.SQL.QueryRowContext(r.Context(), `SELECT id,instrument,gateway,COALESCE(roles,'[]'::jsonb)::text,active FROM participants WHERE id=$1`, id).Scan(&p.ID, &p.Instrument, &p.Gateway, &roles, &p.Active)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			payments.JSON(w, 404, map[string]string{"error": "participant not found"})
 		} else {
 			payments.JSON(w, 503, map[string]string{"error": "participant database unavailable"})
 		}
+		return
+	}
+	if err := json.Unmarshal(roles, &p.Roles); err != nil {
+		payments.JSON(w, 503, map[string]string{"error": "participant data unavailable"})
 		return
 	}
 	if !p.Active {
@@ -101,11 +108,20 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var p payments.Participant
-	if err := payments.Decode(r, &p); err != nil || p.ID == "" || p.Instrument == "" || p.Gateway == "" {
-		payments.JSON(w, 400, map[string]string{"error": "id, instrument and gateway are required"})
+	if err := payments.Decode(r, &p); err != nil {
+		payments.JSON(w, 400, map[string]string{"error": "invalid JSON"})
 		return
 	}
-	_, err := s.db.SQL.ExecContext(r.Context(), `INSERT INTO participants(id,instrument,gateway,active) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET instrument=EXCLUDED.instrument,gateway=EXCLUDED.gateway,active=EXCLUDED.active`, p.ID, p.Instrument, p.Gateway, p.Active)
+	p.ID = strings.TrimSpace(p.ID)
+	p.Instrument = strings.ToLower(strings.TrimSpace(p.Instrument))
+	p.Gateway = strings.TrimSpace(p.Gateway)
+	p.Roles = payments.NormalizeRoles(p.Roles)
+	if err := payments.ValidateParticipant(p); err != nil {
+		payments.JSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	roles, _ := json.Marshal(p.Roles)
+	_, err := s.db.SQL.ExecContext(r.Context(), `INSERT INTO participants(id,instrument,gateway,roles,active) VALUES($1,$2,$3,$4::jsonb,$5) ON CONFLICT(id) DO UPDATE SET instrument=EXCLUDED.instrument,gateway=EXCLUDED.gateway,roles=EXCLUDED.roles,active=EXCLUDED.active`, p.ID, p.Instrument, p.Gateway, string(roles), p.Active)
 	if err != nil {
 		payments.JSON(w, 500, map[string]string{"error": "could not save participant"})
 		return

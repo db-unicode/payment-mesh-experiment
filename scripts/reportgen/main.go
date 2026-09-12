@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,25 @@ type providerResult struct {
 }
 type gatewayStats struct {
 	EffectiveCharges int `json:"effective_charges"`
+}
+
+type prometheusResult struct {
+	Metric map[string]string
+	Value  []json.RawMessage
+}
+
+type prometheusVector struct {
+	Status string
+	Data   struct {
+		ResultType string
+		Result     []prometheusResult
+	}
+}
+
+type mtlsMeasurement struct {
+	Percent, Total, MutualTLS, NonTLS, Unknown float64
+	Hops                                       map[string]bool
+	Valid                                      bool
 }
 
 func main() {
@@ -119,19 +139,116 @@ func measured(latest string) []measurement {
 func expHappy(root, name string) measurement {
 	dir := filepath.Join(root, name)
 	count, failures, p95, ok := locustStats(filepath.Join(dir, "locust_stats.csv"))
-	traces := traceCount(filepath.Join(dir, "traces", "payment-operator.json"))
+	traces, completeTraces := traceCoverage(filepath.Join(dir, "traces", "payment-operator.json"))
 	secrets := readFile(filepath.Join(dir, "events", "operator-mtls-secrets.txt"))
 	listener := readFile(filepath.Join(dir, "events", "egress-mtls-listener.json"))
-	mtls := strings.Contains(secrets, "ACTIVE") && strings.Contains(listener, `"requireClientCertificate": true`)
-	pass := ok && failures == 0 && traces > 0 && mtls
-	return measurement{name, "Happy path por ingress/mTLS con tracing", "Locust solicitudes, fallos, p95, trazas y mTLS", fmt.Sprintf("solicitudes=%d; fallos=%d; p95=%d ms; trazas=%d; mTLS=%t", count, failures, p95, traces, mtls), "0 fallos, trazas > 0 y mTLS verificado", status(pass, ok && traces > 0 && secrets != "" && listener != ""), dir}
+	mtlsConfig := strings.Contains(secrets, "ACTIVE") && strings.Contains(listener, `"requireClientCertificate": true`)
+	mtls := readMTLS(filepath.Join(dir, "metrics", "istio-mtls.json"))
+	mtlsEvidence := "tráfico mTLS no disponible"
+	if mtls.Valid {
+		mtlsEvidence = fmt.Sprintf("tráfico mTLS=%.2f%% (mutual_tls=%.0f; no-mTLS=%.0f; desconocido=%.0f; saltos=%s)", mtls.Percent, mtls.MutualTLS, mtls.NonTLS, mtls.Unknown, mtlsHops(mtls.Hops))
+	}
+	// A Jaeger response with only Envoy sidecar spans is not evidence that the
+	// full payment path ran. Require one trace containing operator,
+	// participant-manager, router, and a concrete gateway service under the
+	// same trace ID.
+	evidence := ok && completeTraces > 0 && secrets != "" && listener != "" && mtls.Valid
+	pass := evidence && failures == 0 && mtlsConfig && mtls.Total > 0 && mtls.MutualTLS == mtls.Total && mtls.NonTLS == 0 && mtls.Unknown == 0
+	return measurement{name, "Happy path por ingress/mTLS con tracing", "Locust solicitudes, fallos, trazas completas y mTLS de tráfico", fmt.Sprintf("solicitudes=%d; fallos=%d; p95=%d ms; trazas=%d; trazas completas=%d; configuración=%t; %s", count, failures, p95, traces, completeTraces, mtlsConfig, mtlsEvidence), "0 fallos, traza completa operator→participant-manager→router→gateway y 100%% de tráfico interno con connection_security_policy=mutual_tls en ambos saltos", status(pass, evidence), dir}
+}
+
+func readMTLS(path string) mtlsMeasurement {
+	var response prometheusVector
+	if !readJSON(path, &response) || response.Status != "success" || response.Data.ResultType != "vector" || len(response.Data.Result) == 0 {
+		return mtlsMeasurement{Hops: map[string]bool{}}
+	}
+	out := mtlsMeasurement{Hops: map[string]bool{}}
+	malformed := false
+	for _, series := range response.Data.Result {
+		value, ok := prometheusValue(series.Value)
+		if !ok || value < 0 {
+			malformed = true
+			continue
+		}
+		// A zero-valued series is not evidence that this hop carried traffic.
+		if value == 0 {
+			continue
+		}
+		out.Total += value
+		source := series.Metric["source_workload"]
+		destination := series.Metric["destination_workload"]
+		if source != "payment-operator" || (destination != "participant-payment-manager" && destination != "payment-router") {
+			out.Unknown += value
+			continue
+		}
+		out.Hops[destination] = true
+		switch series.Metric["connection_security_policy"] {
+		case "mutual_tls":
+			out.MutualTLS += value
+		case "none":
+			out.NonTLS += value
+		case "", "unknown":
+			out.Unknown += value
+		default:
+			out.Unknown += value
+		}
+	}
+	if out.Total > 0 {
+		out.Percent = 100 * out.MutualTLS / out.Total
+	}
+	out.Valid = !malformed && out.Total > 0 && out.Hops["participant-payment-manager"] && out.Hops["payment-router"]
+	return out
+}
+
+func prometheusValue(raw []json.RawMessage) (float64, bool) {
+	if len(raw) < 2 {
+		return 0, false
+	}
+	var text string
+	if json.Unmarshal(raw[1], &text) == nil {
+		value, err := strconv.ParseFloat(text, 64)
+		return value, err == nil && !math.IsNaN(value) && !math.IsInf(value, 0)
+	}
+	var value float64
+	if json.Unmarshal(raw[1], &value) == nil {
+		return value, !math.IsNaN(value) && !math.IsInf(value, 0)
+	}
+	return 0, false
+}
+
+func mtlsHops(hops map[string]bool) string {
+	names := make([]string, 0, len(hops))
+	for name := range hops {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
 }
 func expInstance(root, name string) measurement {
 	dir := filepath.Join(root, name)
-	_, failures, p95, ok := locustStats(filepath.Join(dir, "locust_stats.csv"))
-	injected := fileExists(filepath.Join(dir, "events", "kubectl-delete.out")) || fileExists(filepath.Join(dir, "events", "kubernetes.skip"))
-	pass := ok && injected && failures == 0
-	return measurement{name, "Fallo de una instancia de router", "Locust fallos, p95 e inyección", fmt.Sprintf("fallos=%d; p95=%d ms; inyección=%t", failures, p95, injected), "0 respuestas fuera de HTTP 200/202 y caída registrada", status(pass, ok && injected), dir}
+	count, failures, p95, ok := locustStats(filepath.Join(dir, "locust_stats.csv"))
+	if fileExists(filepath.Join(dir, "events", "kubernetes.skip")) {
+		return measurement{name, "Fallo de una instancia de router", "Locust, inyección y recuperación", "cluster fault injection skipped", "Kubernetes fault injection and recovery artifacts", "NOT EXECUTED", dir}
+	}
+	injected := fileExists(filepath.Join(dir, "events", "kubectl-delete.out"))
+	start, startOK := readInt(filepath.Join(dir, "events", "fault-injection-start-epoch.txt"))
+	recovered, recoveredOK := readInt(filepath.Join(dir, "events", "fault-injection-recovery-epoch.txt"))
+	recoverySeconds, recoveryOK := readInt(filepath.Join(dir, "events", "fault-recovery-seconds.txt"))
+	locustExit, locustExitOK := readInt(filepath.Join(dir, "events", "locust.exit"))
+	readiness := fileExists(filepath.Join(dir, "events", "router-recovery.out"))
+	trafficRecovered, trafficRecoveryOK := readInt(filepath.Join(dir, "events", "traffic-recovery-epoch.txt"))
+	trafficSeconds, trafficSecondsOK := readInt(filepath.Join(dir, "events", "traffic-recovery-seconds.txt"))
+	validLocustExit := locustExitOK && (locustExit == 0 || locustExit == 1)
+	fullRun := ok && count > 0 && failures >= 0 && float64(count-failures)/float64(count) >= 0.99 && validLocustExit
+	durationsConsistent := recoveryOK && trafficSecondsOK && recoverySeconds >= 0 && trafficSeconds >= 0 && recoverySeconds == recovered-start && trafficSeconds == trafficRecovered-start
+	completeEvidence := injected && startOK && recoveredOK && recoveryOK && recovered >= start && readiness && trafficRecoveryOK && trafficSecondsOK && trafficRecovered >= start && durationsConsistent && validLocustExit
+	successPct := 0.0
+	if count > 0 {
+		successPct = 100 * float64(count-failures) / float64(count)
+	}
+	pass := completeEvidence && fullRun && trafficSeconds < 30
+	value := fmt.Sprintf("HTTP 200 success=%.2f%%; fallos=%d; p95=%d ms; pod-ready=%ds; traffic recovery=%ds", successPct, failures, p95, recoverySeconds, trafficSeconds)
+	return measurement{name, "Fallo de una instancia de router", "Éxito HTTP 200 en toda la corrida y recuperación de tráfico medida", value, ">=99% HTTP 200 en toda la corrida; una sonda de pago HTTP 200/SUCCEEDED se recupera en <30s (readiness se reporta aparte)", status(pass, completeEvidence), dir}
 }
 func expDegraded(root, name string) measurement {
 	dir := filepath.Join(root, name)
@@ -231,6 +348,67 @@ func traceCount(path string) int {
 		return 0
 	}
 	return len(v.Data)
+}
+
+type traceSpan struct {
+	TraceID   string `json:"traceID"`
+	ProcessID string `json:"processID"`
+}
+type traceProcess struct {
+	ServiceName string `json:"serviceName"`
+}
+type traceRecord struct {
+	TraceID   string                  `json:"traceID"`
+	Spans     []traceSpan             `json:"spans"`
+	Processes map[string]traceProcess `json:"processes"`
+}
+
+// traceCoverage returns total traces and traces containing the three required
+// service roles. All roles are evaluated within each trace record, so spans
+// from unrelated requests cannot accidentally satisfy the criterion.
+func traceCoverage(path string) (total, complete int) {
+	var v struct {
+		Data []traceRecord `json:"data"`
+	}
+	if !readJSON(path, &v) {
+		return 0, 0
+	}
+	for _, trace := range v.Data {
+		if trace.TraceID == "" {
+			continue
+		}
+		total++
+		roles := map[string]bool{}
+		for _, span := range trace.Spans {
+			if span.TraceID != "" && span.TraceID != trace.TraceID {
+				continue
+			}
+			service := trace.Processes[span.ProcessID].ServiceName
+			switch {
+			case strings.Contains(service, "payment-operator"):
+				roles["operator"] = true
+			case strings.Contains(service, "payment-router"):
+				roles["router"] = true
+			case strings.Contains(service, "participant-payment-manager"):
+				roles["participant"] = true
+			case strings.Contains(service, "gateway-card"), strings.Contains(service, "gateway-bank"):
+				roles["gateway"] = true
+			}
+		}
+		if roles["operator"] && roles["participant"] && roles["router"] && roles["gateway"] {
+			complete++
+		}
+	}
+	return total, complete
+}
+
+func readInt(path string) (int, bool) {
+	raw := strings.TrimSpace(readFile(path))
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	return n, err == nil
 }
 func sameChecksums(dir string) (bool, int) {
 	data, err := os.ReadFile(filepath.Join(dir, "response-checksums.txt"))

@@ -42,6 +42,9 @@ spec:
             - { name: ROUTER_DATABASE_URL, value: "postgres://router:router@router-db:5432/router?sslmode=disable" }
             - { name: GATEWAY_CARD_URL, value: "http://gateway-card.mesh.local" }
             - { name: GATEWAY_BANK_URL, value: "http://gateway-bank.mesh.local" }
+            - name: GATEWAY_PAYMENT_TOKEN
+              valueFrom:
+                secretKeyRef: { name: gateway-auth, key: GATEWAY_PAYMENT_TOKEN }
             - { name: APP_CIRCUIT_BREAKER_ENABLED, value: "false" }
 ---
 apiVersion: v1

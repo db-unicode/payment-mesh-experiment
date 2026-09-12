@@ -5,6 +5,11 @@ metadata: { name: payment-mesh }
 spec:
   meshConfig:
     enableTracing: true
+    # Limit sidecar routes to registered in-mesh services and the two explicit
+    # gateway ServiceEntries; AuthorizationPolicy and payment auth protect the
+    # egress path and provider API respectively.
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY
     defaultConfig:
       proxyMetadata:
         ISTIO_META_DNS_CAPTURE: "true"

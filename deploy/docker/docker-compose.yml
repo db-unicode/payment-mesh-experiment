@@ -20,13 +20,13 @@ services:
     volumes: [router-data:/var/lib/postgresql/data]
   gateway-card:
     build: { context: ../.., dockerfile: deploy/docker/gateway.Dockerfile }
-    environment: { GATEWAY_NAME: gateway-card, GATEWAY_BEHAVIOR: success, HTTP_ADDR: ":8443", TLS_CERT_FILE: /certs/tls.crt, TLS_KEY_FILE: /certs/tls.key }
-    volumes: [./certs:/certs:ro]
+    environment: { GATEWAY_NAME: gateway-card, GATEWAY_BEHAVIOR: success, GATEWAY_PAYMENT_TOKEN: "${GATEWAY_PAYMENT_TOKEN:?run mise run setup or set GATEWAY_PAYMENT_TOKEN}", GATEWAY_ADMIN_TOKEN: "${GATEWAY_ADMIN_TOKEN:?run mise run setup or set GATEWAY_ADMIN_TOKEN}", GATEWAY_STATE_FILE: /var/lib/gateway/state.json, OTEL_EXPORTER_OTLP_ENDPOINT: "${GATEWAY_OTEL_ENDPOINT:-http://otel-collector:4318}", HTTP_ADDR: ":8443", TLS_CERT_FILE: /certs/tls.crt, TLS_KEY_FILE: /certs/tls.key }
+    volumes: [./certs:/certs:ro, gateway-card-state:/var/lib/gateway]
     ports: ["8091:8443"]
   gateway-bank:
     build: { context: ../.., dockerfile: deploy/docker/gateway.Dockerfile }
-    environment: { GATEWAY_NAME: gateway-bank, GATEWAY_BEHAVIOR: success, HTTP_ADDR: ":8443", TLS_CERT_FILE: /certs/tls.crt, TLS_KEY_FILE: /certs/tls.key }
-    volumes: [./certs:/certs:ro]
+    environment: { GATEWAY_NAME: gateway-bank, GATEWAY_BEHAVIOR: success, GATEWAY_PAYMENT_TOKEN: "${GATEWAY_PAYMENT_TOKEN:?run mise run setup or set GATEWAY_PAYMENT_TOKEN}", GATEWAY_ADMIN_TOKEN: "${GATEWAY_ADMIN_TOKEN:?run mise run setup or set GATEWAY_ADMIN_TOKEN}", GATEWAY_STATE_FILE: /var/lib/gateway/state.json, OTEL_EXPORTER_OTLP_ENDPOINT: "${GATEWAY_OTEL_ENDPOINT:-http://otel-collector:4318}", HTTP_ADDR: ":8443", TLS_CERT_FILE: /certs/tls.crt, TLS_KEY_FILE: /certs/tls.key }
+    volumes: [./certs:/certs:ro, gateway-bank-state:/var/lib/gateway]
     ports: ["8092:8443"]
   participant-payment-manager:
     build: { context: ../.., dockerfile: deploy/docker/Dockerfile, args: { SERVICE: participant-manager } }
@@ -35,7 +35,7 @@ services:
     ports: ["8081:8080"]
   payment-router:
     build: { context: ../.., dockerfile: deploy/docker/Dockerfile, args: { SERVICE: payment-router } }
-    environment: { ROUTER_DATABASE_URL: postgres://router:router@router-db:5432/router?sslmode=disable, GATEWAY_CARD_URL: https://gateway-card:8443, GATEWAY_BANK_URL: https://gateway-bank:8443, GATEWAY_TLS_INSECURE: "true", HTTP_ADDR: ":8080" }
+    environment: { ROUTER_DATABASE_URL: postgres://router:router@router-db:5432/router?sslmode=disable, GATEWAY_CARD_URL: https://gateway-card:8443, GATEWAY_BANK_URL: https://gateway-bank:8443, GATEWAY_PAYMENT_TOKEN: "${GATEWAY_PAYMENT_TOKEN:?run mise run setup or set GATEWAY_PAYMENT_TOKEN}", GATEWAY_TLS_INSECURE: "true", HTTP_ADDR: ":8080" }
     depends_on: { router-db: { condition: service_healthy }, gateway-card: { condition: service_started }, gateway-bank: { condition: service_started } }
     ports: ["8082:8080"]
   payment-operator:
@@ -43,4 +43,4 @@ services:
     environment: { OPERATOR_DATABASE_URL: postgres://operator:operator@operator-db:5432/operator?sslmode=disable, PARTICIPANT_MANAGER_URL: http://participant-payment-manager:8080, ROUTER_URL: http://payment-router:8080, HTTP_ADDR: ":8080" }
     depends_on: { operator-db: { condition: service_healthy }, participant-payment-manager: { condition: service_started }, payment-router: { condition: service_started } }
     ports: ["8080:8080"]
-volumes: { operator-data: {}, participant-data: {}, router-data: {} }
+volumes: { operator-data: {}, participant-data: {}, router-data: {}, gateway-card-state: {}, gateway-bank-state: {} }

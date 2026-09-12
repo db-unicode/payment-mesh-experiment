@@ -5,7 +5,12 @@ spec:
   replicas: 1
   selector: { matchLabels: { app: prometheus } }
   template:
-    metadata: { labels: { app: prometheus } }
+    metadata:
+      labels: { app: prometheus }
+      # Scrape Istio/admin telemetry ports directly; application traffic on
+      # port 8080 remains intercepted and protected by the mesh.
+      annotations:
+        traffic.sidecar.istio.io/excludeOutboundPorts: "15020,15090,15014"
     spec:
       serviceAccountName: prometheus
       containers:

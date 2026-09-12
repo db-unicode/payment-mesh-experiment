@@ -39,7 +39,9 @@ spec:
   action: ALLOW
   rules:
     - from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-operator"] } }]
-      to: [{ operation: { methods: ["POST"], paths: ["/internal/v1/payments"] } }]
+      to:
+        - operation: { methods: ["POST"], paths: ["/internal/v1/payments"] }
+        - operation: { methods: ["GET"], paths: ["/v1/payments/*"] }
 ---
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
@@ -52,6 +54,18 @@ spec:
   rules:
     - from: [{ source: { principals: ["cluster.local/ns/payments/sa/payment-operator"] } }]
       to: [{ operation: { methods: ["GET"], paths: ["/v1/participants/*"] } }]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-participant-admin
+  namespace: payments
+spec:
+  selector: { matchLabels: { app: participant-payment-manager } }
+  action: ALLOW
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/payments/sa/participant-admin"] } }]
+      to: [{ operation: { methods: ["POST"], paths: ["/v1/participants"] } }]
 ---
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
