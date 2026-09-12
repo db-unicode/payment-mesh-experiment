@@ -1,6 +1,12 @@
 #!/usr/bin/env sh
 set -u
 
+EXPERIMENT="${EXPERIMENT:-all}"
+case "$EXPERIMENT" in
+  all|1|2|3|4|5|6) ;;
+  *) echo 'EXPERIMENT must be all or a number from 1 to 6.' >&2; exit 2 ;;
+esac
+
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 INGRESS_HOST="${INGRESS_HOST:-}"
 # These URLs are deliberately local-only control/readout paths. Payment
@@ -40,6 +46,14 @@ control_curl() {
 
 write_metadata() {
   exp="$1"; hypothesis="$2"; metric="$3"; criterion="$4"
+  if [ "${DEMO_STEP:-0}" = "1" ]; then
+    if [ ! -t 0 ]; then
+      echo 'DEMO_STEP=1 requires an interactive terminal.' >&2
+      exit 1
+    fi
+    printf '\n%s\n%s\nPress Enter to run this experiment: ' "$exp" "$hypothesis"
+    read -r demo_continue || exit 1
+  fi
   dir="$ROOT/$exp"; mkdir -p "$dir/events" "$dir/metrics" "$dir/traces" "$dir/logs"
   commit="$(git rev-parse HEAD 2>/dev/null || printf unknown)"
   printf '{"experiment":"%s","hypothesis":"%s","metric":"%s","criterion":"%s","commit":"%s","timestamp":"%s","users":%s,"spawn_rate":%s,"duration":"%s"}\n' "$exp" "$hypothesis" "$metric" "$criterion" "$commit" "$STAMP" "$USERS" "$SPAWN" "$DURATION" > "$dir/metadata.json"
@@ -144,10 +158,17 @@ run_experiment() {
 }
 
 # 1. Happy path through ingress/mesh with mTLS and tracing (Kubernetes run required for security verdict).
+if [ "$EXPERIMENT" != all ]; then
+  set_behavior "$CARD_GATEWAY_ADMIN" success || exit 1
+  set_behavior "$BANK_GATEWAY_ADMIN" success || exit 1
+fi
+if [ "$EXPERIMENT" = all ] || [ "$EXPERIMENT" = 1 ]; then
 set_behavior "$CARD_GATEWAY_ADMIN" success; set_behavior "$BANK_GATEWAY_ADMIN" success
 run_experiment 01-happy-mesh "Una orden válida atraviesa ingress, mTLS y tracing." "éxito, mTLS, trazas" "100% SUCCEEDED (HTTP 200), mTLS activo y existe una traza completa" happy
+fi
 
 # 2. Kill one router instance only when a Kubernetes context is available.
+if [ "$EXPERIMENT" = all ] || [ "$EXPERIMENT" = 2 ]; then
 write_metadata 02-instance-failure "Eliminar una réplica no interrumpe el servicio." "éxito, recuperación, eventos" ">=99% SUCCEEDED (HTTP 200) en toda la corrida; recuperación <30s medida aparte"
 if command -v kubectl >/dev/null 2>&1 && kubectl get deployment payment-router -n payments >/dev/null 2>&1; then
   run_load 02-instance-failure load & load_pid=$!
@@ -173,6 +194,8 @@ capture_common 02-instance-failure
 printf '{"status":"%s","result":"Pod-failure command and load were run only when Kubernetes was available.","evidence":"evidence/runs/%s/02-instance-failure"}\n' "$status" "$STAMP" > "$ROOT/02-instance-failure/verdict.json"
 
 # 3. Degraded provider: 5xx/timeout become PENDING and breaker evidence is captured.
+fi
+if [ "$EXPERIMENT" = all ] || [ "$EXPERIMENT" = 3 ]; then
 mkdir -p "$ROOT/03-gateway-degraded/metrics" "$ROOT/03-gateway-degraded/logs"
 if command -v kubectl >/dev/null 2>&1 && kubectl get deployment istio-egressgateway -n istio-system >/dev/null 2>&1; then
   kubectl exec -n istio-system deployment/istio-egressgateway -- pilot-agent request GET stats > "$ROOT/03-gateway-degraded/metrics/egress-envoy-stats-before.txt" 2> "$ROOT/03-gateway-degraded/logs/egress-stats-before.err"
@@ -203,6 +226,8 @@ done
 printf '{"recovered":%s,"attempts":%s}\n' "$recovered" "$recovery_attempt" > "$ROOT/03-gateway-degraded/events/egress-recovery-verdict.json"
 
 # 4. Two real provider contracts normalize to the common status model.
+fi
+if [ "$EXPERIMENT" = all ] || [ "$EXPERIMENT" = 4 ]; then
 write_metadata 04-provider-normalization "Los estados de tarjeta y banco se normalizan al mismo modelo público." "estado del proveedor, estado normalizado" "AUTHORIZED/ACCEPTED se vuelven SUCCEEDED; DECLINED/REJECTED se vuelven FAILED"
 api_curl -fsS -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: norm-card-$STAMP" -d '{"debtor_participant_id":"participant-card","creditor_participant_id":"participant-bank","amount_minor":1200,"currency":"COP","reference":"normalization-card"}' > "$ROOT/04-provider-normalization/events/card-authorized.json"; c1=$?
 api_curl -fsS -X POST "$BASE_URL/v1/payments" -H 'content-type: application/json' -H "Idempotency-Key: norm-bank-$STAMP" -d '{"debtor_participant_id":"participant-bank","creditor_participant_id":"participant-card","amount_minor":1200,"currency":"COP","reference":"normalization-bank"}' > "$ROOT/04-provider-normalization/events/bank-accepted.json"; c2=$?
@@ -215,6 +240,8 @@ capture_common 04-provider-normalization; status=EXECUTED; [ "$c1" -ne 0 ] && st
 printf '{"status":"%s","result":"Provider adapter responses were captured for card and bank.","evidence":"evidence/runs/%s/04-provider-normalization"}\n' "$status" "$STAMP" > "$ROOT/04-provider-normalization/verdict.json"
 
 # 5. Exactly ten concurrent requests share one key; gateway stats prove one effective charge.
+fi
+if [ "$EXPERIMENT" = all ] || [ "$EXPERIMENT" = 5 ]; then
 write_metadata 05-idempotency-duplicates "Diez solicitudes idénticas concurrentes producen un cobro del proveedor." "effective_charges, respuestas HTTP" "effective_charges aumenta exactamente en uno"
 key="duplicate-$STAMP"; dir="$ROOT/05-idempotency-duplicates"; pids=""
 control_curl -kfsS "$CARD_GATEWAY_ADMIN/stats" > "$dir/metrics/card-stats-before.json"
@@ -225,6 +252,8 @@ capture_common 05-idempotency-duplicates; status=EXECUTED
 printf '{"status":"%s","result":"Ten responses and provider counters were captured; inspect effective_charges for the verdict.","evidence":"evidence/runs/%s/05-idempotency-duplicates"}\n' "$status" "$STAMP" > "$dir/verdict.json"
 
 # 6. Participant DB isolation: scale only its database down when Kubernetes is available.
+fi
+if [ "$EXPERIMENT" = all ] || [ "$EXPERIMENT" = 6 ]; then
 write_metadata 06-participant-db-failure "La caída de participant DB queda aislada y retorna un error explícito de dependencia." "disponibilidad, estado HTTP, eventos" "El estado del router permanece intacto y la dependencia de participantes no está disponible"
 if command -v kubectl >/dev/null 2>&1 && kubectl get deployment participant-db -n payments >/dev/null 2>&1; then
   kubectl scale deployment participant-db -n payments --replicas=0 > "$ROOT/06-participant-db-failure/events/kubectl-scale-down.out" 2> "$ROOT/06-participant-db-failure/logs/kubectl-scale-down.err"; down=$?
@@ -242,5 +271,6 @@ fi
 capture_common 06-participant-db-failure
 printf '{"status":"%s","result":"Participant DB fault injection was performed only when Kubernetes was available.","evidence":"evidence/runs/%s/06-participant-db-failure"}\n' "$status" "$STAMP" > "$ROOT/06-participant-db-failure/verdict.json"
 
+fi
 printf '%s\n' "$ROOT" > evidence/latest-run
 echo "Evidencia escrita en $ROOT"
