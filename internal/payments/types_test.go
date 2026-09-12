@@ -15,6 +15,29 @@ func TestValidateRequest(t *testing.T) {
 	assert.Error(t, ValidateRequest(PublicPaymentRequest{AmountMinor: 100, Currency: "CO", DebtorParticipantID: "d", CreditorParticipantID: "c", Reference: "r"}))
 }
 
+func TestValidateParticipantRolesAndInstrument(t *testing.T) {
+	p := Participant{ID: "participant-1", Instrument: "card", Gateway: "gateway-card", Roles: []string{" debtor ", "creditor", "debtor"}}
+	assert.NoError(t, ValidateParticipant(p))
+	assert.Equal(t, []string{"debtor", "creditor"}, NormalizeRoles(p.Roles))
+	assert.Error(t, ValidateParticipant(Participant{ID: "p", Instrument: "crypto", Gateway: "g", Roles: []string{"debtor"}}))
+	assert.Error(t, ValidateParticipant(Participant{ID: "p", Instrument: "card", Gateway: "g", Roles: []string{"merchant"}}))
+	assert.Error(t, ValidateParticipant(Participant{ID: "p", Instrument: "card", Gateway: "g"}))
+}
+
+func TestValidateCurrencyRequiresLetters(t *testing.T) {
+	valid := PublicPaymentRequest{AmountMinor: 1, Currency: "cop", DebtorParticipantID: "d", CreditorParticipantID: "c", Reference: "r"}
+	assert.NoError(t, ValidateRequest(valid))
+	valid.Currency = "C0P"
+	assert.Error(t, ValidateRequest(valid))
+}
+
+func TestValidateRouterRequestRejectsUnknownInstrument(t *testing.T) {
+	req := RouterPaymentRequest{AmountMinor: 1, Currency: "COP", DebtorParticipantID: "d", CreditorParticipantID: "c", Reference: "r", Instrument: "unknown"}
+	assert.Error(t, ValidateRouterRequest(req))
+	req.Instrument = "bank_transfer"
+	assert.NoError(t, ValidateRouterRequest(req))
+}
+
 func TestRequestHashIsStableAndPayloadSensitive(t *testing.T) {
 	request := PublicPaymentRequest{AmountMinor: 100, Currency: "COP", DebtorParticipantID: "d", CreditorParticipantID: "c", Reference: "r"}
 	one, err := RequestHash(request)

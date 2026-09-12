@@ -1,14 +1,25 @@
 package main
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/academic/payment-mesh-experiment/internal/payments"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 type cardRequest struct {
@@ -46,18 +57,69 @@ var state = struct {
 }{card: map[string]cardResult{}, bank: map[string]bankResult{}}
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	ctx := context.Background()
+	serviceName := getenv("OTEL_SERVICE_NAME", getenv("GATEWAY_NAME", "gateway"))
+	tracerProvider, shutdownTracer, err := payments.NewTracerProvider(ctx, serviceName)
+	if err != nil {
+		return err
+	}
+	otel.SetTracerProvider(tracerProvider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := shutdownTracer(shutdownCtx); shutdownErr != nil {
+			log.Printf("gateway tracer shutdown: %v", shutdownErr)
+		}
+	}()
+	if err := loadState(); err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", health)
-	mux.HandleFunc("/admin/behavior", behavior)
-	mux.HandleFunc("/stats", statsHandler)
-	mux.HandleFunc("/v1/card/authorizations", cardAuthorization)
-	mux.HandleFunc("/v2/transfers", bankTransfer)
+	// Control endpoints are separate from the payment contract. They are
+	// intended for the local experiment runner and require their own token.
+	mux.Handle("/admin/behavior", controlAuth(http.HandlerFunc(behavior)))
+	mux.Handle("/stats", controlAuth(http.HandlerFunc(statsHandler)))
+	// Only the payment contract is protected. The behavior and stats endpoints
+	// remain available to the local experiment runner and never accept payment
+	// requests, keeping operational control separate from gateway traffic.
+	mux.Handle("/v1/card/authorizations", paymentAuth(http.HandlerFunc(cardAuthorization)))
+	mux.Handle("/v2/transfers", paymentAuth(http.HandlerFunc(bankTransfer)))
 	addr := getenv("HTTP_ADDR", ":8080")
-	log.Printf("gateway mock listening on %s (%s)", addr, getenv("GATEWAY_NAME", "gateway"))
-	if cert, key := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE"); cert != "" && key != "" {
-		log.Fatal(http.ListenAndServeTLS(addr, cert, key, mux))
-	} else {
-		log.Fatal(http.ListenAndServe(addr, mux))
+	handler := payments.TraceHTTPHandler(mux, tracerProvider.Tracer(serviceName))
+	server := &http.Server{Addr: addr, Handler: handler}
+	serveErr := make(chan error, 1)
+	go func() {
+		if cert, key := os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE"); cert != "" && key != "" {
+			serveErr <- server.ListenAndServeTLS(cert, key)
+			return
+		}
+		serveErr <- server.ListenAndServe()
+	}()
+	log.Printf("gateway mock listening on %s (%s)", addr, serviceName)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(stop)
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-stop:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return nil
 	}
 }
 func health(w http.ResponseWriter, _ *http.Request) { write(w, 200, map[string]string{"status": "ok"}) }
@@ -96,7 +158,12 @@ func cardAuthorization(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		state.card[req.RequestID] = res
-		state.stats.EffectiveCharges++
+		if err := persistStateLocked(); err != nil {
+			delete(state.card, req.RequestID)
+			state.Unlock()
+			write(w, http.StatusServiceUnavailable, map[string]string{"message": "gateway state unavailable"})
+			return
+		}
 		state.Unlock()
 		write(w, 200, res)
 		return
@@ -110,6 +177,13 @@ func cardAuthorization(w http.ResponseWriter, r *http.Request) {
 	}
 	state.card[req.RequestID] = res
 	state.stats.EffectiveCharges++
+	if err := persistStateLocked(); err != nil {
+		delete(state.card, req.RequestID)
+		state.stats.EffectiveCharges--
+		state.Unlock()
+		write(w, http.StatusServiceUnavailable, map[string]string{"message": "gateway state unavailable"})
+		return
+	}
 	state.Unlock()
 	write(w, 200, res)
 }
@@ -148,7 +222,12 @@ func bankTransfer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		state.bank[req.TransferID] = res
-		state.stats.EffectiveCharges++
+		if err := persistStateLocked(); err != nil {
+			delete(state.bank, req.TransferID)
+			state.Unlock()
+			write(w, http.StatusServiceUnavailable, map[string]string{"message": "gateway state unavailable"})
+			return
+		}
 		state.Unlock()
 		write(w, 200, res)
 		return
@@ -162,8 +241,122 @@ func bankTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	state.bank[req.TransferID] = res
 	state.stats.EffectiveCharges++
+	if err := persistStateLocked(); err != nil {
+		delete(state.bank, req.TransferID)
+		state.stats.EffectiveCharges--
+		state.Unlock()
+		write(w, http.StatusServiceUnavailable, map[string]string{"message": "gateway state unavailable"})
+		return
+	}
 	state.Unlock()
 	write(w, 200, res)
+}
+
+type persistedState struct {
+	Card  map[string]cardResult `json:"card"`
+	Bank  map[string]bankResult `json:"bank"`
+	Stats stats                 `json:"stats"`
+}
+
+func statePath() string { return strings.TrimSpace(os.Getenv("GATEWAY_STATE_FILE")) }
+
+func loadState() error {
+	path := statePath()
+	if path == "" {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var saved persistedState
+	if err := json.Unmarshal(b, &saved); err != nil {
+		return err
+	}
+	state.Lock()
+	defer state.Unlock()
+	if saved.Card != nil {
+		state.card = saved.Card
+	}
+	if saved.Bank != nil {
+		state.bank = saved.Bank
+	}
+	state.stats = saved.Stats
+	return nil
+}
+
+// persistStateLocked writes idempotency results before a successful provider
+// response is returned. Rename makes the file atomic across process crashes;
+// callers must hold state's mutex.
+func persistStateLocked() error {
+	path := statePath()
+	if path == "" {
+		return nil
+	}
+	saved, err := json.Marshal(persistedState{Card: state.card, Bank: state.bank, Stats: state.stats})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, saved, 0o640); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func paymentAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expected := strings.TrimSpace(os.Getenv("GATEWAY_PAYMENT_TOKEN"))
+		if expected == "" {
+			expected = strings.TrimSpace(os.Getenv("GATEWAY_AUTH_TOKEN"))
+		}
+		provided := strings.TrimSpace(r.Header.Get("X-Gateway-Auth"))
+		if provided == "" {
+			provided = strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		}
+		// A missing token is a configuration error, not an invitation to expose
+		// the external payment endpoint without authentication.
+		if expected == "" {
+			write(w, http.StatusServiceUnavailable, map[string]string{"error": "gateway authentication is not configured"})
+			return
+		}
+		if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+			write(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func controlAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Control calls are authenticated even when the service is exposed on a
+		// host-local port: a reverse proxy can make a remote caller appear local.
+		expected := strings.TrimSpace(os.Getenv("GATEWAY_ADMIN_TOKEN"))
+		provided := strings.TrimSpace(r.Header.Get("X-Gateway-Admin"))
+		if provided == "" {
+			provided = strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		}
+		if expected == "" {
+			write(w, http.StatusServiceUnavailable, map[string]string{"error": "gateway control authentication is not configured"})
+			return
+		}
+		if provided == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+			write(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 func waitProvider(r *http.Request) bool {
 	delay, _ := strconv.Atoi(getenv("GATEWAY_DELAY_MS", "0"))

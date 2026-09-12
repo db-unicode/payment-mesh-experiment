@@ -33,8 +33,12 @@ func Open(ctx context.Context, envName string) (*DB, error) {
 
 func (d *DB) EnsureParticipants(ctx context.Context) error {
 	_, err := d.SQL.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS participants (
-		id TEXT PRIMARY KEY, instrument TEXT NOT NULL, gateway TEXT NOT NULL, active BOOLEAN NOT NULL DEFAULT TRUE,
-		created_at TIMESTAMPTZ NOT NULL DEFAULT now())`)
+		id TEXT PRIMARY KEY, instrument TEXT NOT NULL, gateway TEXT NOT NULL,
+		roles JSONB NOT NULL DEFAULT '[]'::jsonb,
+		active BOOLEAN NOT NULL DEFAULT TRUE,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+		ALTER TABLE participants ADD COLUMN IF NOT EXISTS roles JSONB NOT NULL DEFAULT '[]'::jsonb;
+		ALTER TABLE participants ALTER COLUMN roles SET DEFAULT '[]'::jsonb`)
 	return err
 }
 

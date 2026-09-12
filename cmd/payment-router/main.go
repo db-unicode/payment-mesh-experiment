@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,6 +25,32 @@ type server struct {
 	breakerEnabled bool
 }
 
+// paymentLookup includes the frozen internal request only on the router's
+// internal lookup response. The operator uses it to recover an old PENDING
+// operation without re-reading mutable participant data.
+type paymentLookup struct {
+	payments.PaymentResponse
+	payments.RouterPaymentRequest
+}
+
+const defaultPendingRecoveryAfter = 30 * time.Second
+
+// pendingRecoveryAfter bounds how long an operation may remain in the
+// uncertain state before a retry is allowed. The provider idempotency key is
+// reused for that retry, so a provider that already accepted the charge will
+// return the original result instead of creating a second charge.
+func pendingRecoveryAfter() time.Duration {
+	value := strings.TrimSpace(os.Getenv("PENDING_RECOVERY_AFTER"))
+	if value == "" {
+		return defaultPendingRecoveryAfter
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d < 0 {
+		return defaultPendingRecoveryAfter
+	}
+	return d
+}
+
 func main() {
 	ctx := context.Background()
 	db, err := openWithRetry(ctx, "ROUTER_DATABASE_URL")
@@ -35,9 +62,10 @@ func main() {
 		log.Fatal(err)
 	}
 	insecure := getenv("GATEWAY_TLS_INSECURE", "false") == "true"
-	providerClient := payments.NewProviderClient(2, insecure)
-	card := payments.CardAdapter{BaseURL: getenv("GATEWAY_CARD_URL", "https://gateway-card:8443"), Client: providerClient}
-	bank := payments.BankAdapter{BaseURL: getenv("GATEWAY_BANK_URL", "https://gateway-bank:8443"), Client: providerClient}
+	authToken := strings.TrimSpace(getenv("GATEWAY_PAYMENT_TOKEN", getenv("GATEWAY_AUTH_TOKEN", "")))
+	providerClient := payments.NewProviderClient(3, insecure)
+	card := payments.CardAdapter{BaseURL: getenv("GATEWAY_CARD_URL", "https://gateway-card:8443"), Client: providerClient, AuthToken: authToken}
+	bank := payments.BankAdapter{BaseURL: getenv("GATEWAY_BANK_URL", "https://gateway-bank:8443"), Client: providerClient, AuthToken: authToken}
 	s := &server{db: db, circuits: map[string]*payments.Circuit{"gateway-card": payments.NewCircuit(5, 30*time.Second), "gateway-bank": payments.NewCircuit(5, 30*time.Second)}, adapters: map[string]func(context.Context, payments.RouterPaymentRequest, string) payments.ProviderResult{"gateway-card": card.Charge, "gateway-bank": bank.Charge}, breakerEnabled: getenv("APP_CIRCUIT_BREAKER_ENABLED", "true") != "false"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
@@ -87,82 +115,168 @@ func (s *server) create(w http.ResponseWriter, r *http.Request) {
 		payments.JSON(w, 400, map[string]string{"error": "invalid JSON"})
 		return
 	}
+	originalReq := req
+	// Persist and hash one canonical internal representation. PostgreSQL's
+	// CHAR(3) returns the stored uppercase currency, so this also makes a
+	// recovery replay equivalent when the original request used lowercase.
+	req.Currency = strings.ToUpper(strings.TrimSpace(req.Currency))
+	req.Instrument = strings.ToLower(strings.TrimSpace(req.Instrument))
 	if e := payments.ValidateRouterRequest(req); e != nil {
 		payments.JSON(w, 400, map[string]string{"error": e.Error()})
 		return
 	}
-	hash, _ := payments.RequestHash(req)
-	tx, e := s.db.SQL.BeginTx(r.Context(), nil)
+	hash, e := payments.RequestHash(req)
+	if e != nil {
+		payments.JSON(w, 400, map[string]string{"error": "could not hash request"})
+		return
+	}
+	legacyHash, _ := payments.RequestHash(originalReq)
+	legacyCanonicalReq := req
+	legacyCanonicalReq.Currency = strings.ToLower(req.Currency)
+	legacyCanonicalHash, _ := payments.RequestHash(legacyCanonicalReq)
+	// Hold a PostgreSQL session advisory lock for the whole reservation,
+	// provider call, and result update. The reservation itself is committed
+	// before the provider call so an uncertain result remains recoverable after
+	// a process crash; the session lock serializes concurrent duplicates.
+	dbCtx, cancelDB := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+	defer cancelDB()
+	conn, e := s.db.SQL.Conn(dbCtx)
+	if e != nil {
+		payments.JSON(w, 500, map[string]string{"error": "database unavailable"})
+		return
+	}
+	defer conn.Close()
+	if _, e = conn.ExecContext(dbCtx, `SELECT pg_advisory_lock(hashtext($1))`, key); e != nil {
+		payments.JSON(w, 500, map[string]string{"error": "database lock unavailable"})
+		return
+	}
+	defer func() {
+		unlockCtx, unlockCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer unlockCancel()
+		var unlocked bool
+		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock(hashtext($1))`, key).Scan(&unlocked); err != nil || !unlocked {
+			// Returning a connection that may still hold a session lock would
+			// block every future request using the same key. Mark it bad so the
+			// pool discards the physical connection instead.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
+	tx, e := conn.BeginTx(dbCtx, nil)
 	if e != nil {
 		payments.JSON(w, 500, map[string]string{"error": "database unavailable"})
 		return
 	}
 	defer tx.Rollback()
-	if _, e = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext($1))`, key); e != nil {
-		payments.JSON(w, 500, map[string]string{"error": "database lock unavailable"})
-		return
-	}
 	var existing payments.PaymentResponse
 	var existingHash string
-	var created time.Time
-	e = tx.QueryRowContext(r.Context(), `SELECT id::text,idempotency_key,request_hash,status,gateway,COALESCE(provider_ref,''),COALESCE(error,''),created_at FROM payments WHERE idempotency_key=$1`, key).Scan(&existing.ID, &existing.IdempotencyKey, &existingHash, &existing.Status, &existing.Gateway, &existing.ProviderRef, &existing.Error, &created)
+	var created, updated time.Time
+	var lease time.Time
+	shouldCharge := false
+	e = tx.QueryRowContext(dbCtx, `SELECT id::text,idempotency_key,request_hash,status,gateway,COALESCE(provider_ref,''),COALESCE(error,''),created_at,updated_at FROM payments WHERE idempotency_key=$1`, key).Scan(&existing.ID, &existing.IdempotencyKey, &existingHash, &existing.Status, &existing.Gateway, &existing.ProviderRef, &existing.Error, &created, &updated)
+	found := e == nil
 	if e == nil {
-		if existingHash != hash {
+		if existingHash != hash && existingHash != legacyHash && existingHash != legacyCanonicalHash {
 			payments.JSON(w, 409, map[string]string{"error": "idempotency key already used with another payload"})
 			return
 		}
+		existing.Status = payments.NormalizeStatus(existing.Status)
 		existing.CreatedAt = created.UTC().Format(time.RFC3339Nano)
-		payments.JSON(w, payments.StatusCode(existing.Status), existing)
-		return
+		if existing.Status == "PENDING" && time.Since(updated) >= pendingRecoveryAfter() {
+			// Claim recovery while the per-key advisory lock is held. A second
+			// request will observe the refreshed updated_at and return PENDING.
+			if e = tx.QueryRowContext(dbCtx, `UPDATE payments SET error=$1,updated_at=now() WHERE id=$2 AND status='PENDING' RETURNING updated_at`, "recovering payment", existing.ID).Scan(&lease); e != nil {
+				payments.JSON(w, 500, map[string]string{"error": "could not claim pending payment"})
+				return
+			}
+			shouldCharge = true
+		} else {
+			if e = tx.Commit(); e != nil {
+				payments.JSON(w, 500, map[string]string{"error": "database commit failed"})
+				return
+			}
+			payments.JSON(w, payments.StatusCode(existing.Status), existing)
+			return
+		}
 	}
-	if !errors.Is(e, sql.ErrNoRows) {
+	if !found && !errors.Is(e, sql.ErrNoRows) {
 		payments.JSON(w, 500, map[string]string{"error": "database read failed"})
 		return
 	}
 	id := newUUID()
 	gateway := gatewayFor(req.Instrument)
-	if _, e = tx.ExecContext(r.Context(), `INSERT INTO payments(id,idempotency_key,request_hash,amount_minor,currency,instrument,participant_id,debtor_participant_id,creditor_participant_id,reference,status,gateway) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$11)`, id, key, hash, req.AmountMinor, strings.ToUpper(req.Currency), req.Instrument, req.DebtorParticipantID, req.DebtorParticipantID, req.CreditorParticipantID, req.Reference, gateway); e != nil {
-		payments.JSON(w, 500, map[string]string{"error": "database insert failed"})
-		return
+	if !shouldCharge {
+		if e = tx.QueryRowContext(dbCtx, `INSERT INTO payments(id,idempotency_key,request_hash,amount_minor,currency,instrument,participant_id,debtor_participant_id,creditor_participant_id,reference,status,gateway) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$11) RETURNING created_at,updated_at`, id, key, hash, req.AmountMinor, strings.ToUpper(req.Currency), req.Instrument, req.DebtorParticipantID, req.DebtorParticipantID, req.CreditorParticipantID, req.Reference, gateway).Scan(&created, &lease); e != nil {
+			payments.JSON(w, 500, map[string]string{"error": "database insert failed"})
+			return
+		}
+		shouldCharge = true
+	} else {
+		id = existing.ID
+		gateway = existing.Gateway
 	}
 	if e = tx.Commit(); e != nil {
 		payments.JSON(w, 500, map[string]string{"error": "database commit failed"})
 		return
 	}
-	result := s.charge(r, req, key, gateway)
-	_, _ = s.db.SQL.ExecContext(r.Context(), `UPDATE payments SET status=$1,provider_ref=$2,error=$3,updated_at=now() WHERE id=$4`, result.Status, result.ProviderRef, result.Error, id)
+	result := payments.PaymentResponse{Status: "PENDING", Error: "payment processing in progress"}
+	if shouldCharge {
+		result = s.charge(r, req, key, gateway)
+		result.Status = payments.NormalizeStatus(result.Status)
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+		e = s.persistResultConn(persistCtx, conn, id, result, lease)
+		cancel()
+		if e != nil {
+			// Never report a terminal result that was not durably recorded. The
+			// committed PENDING reservation remains available for a later retry;
+			// providers must deduplicate the reused key.
+			result.Status = "PENDING"
+			result.Error = "payment result persistence unavailable"
+		}
+	}
 	result.ID = id
 	result.IdempotencyKey = key
 	result.Gateway = gateway
-	result.CreatedAt = payments.Now()
+	result.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 	s.metrics.Count(result.Status == "SUCCEEDED", time.Since(started).Milliseconds())
 	payments.JSON(w, payments.StatusCode(result.Status), result)
+}
+
+func (s *server) persistResultConn(ctx context.Context, conn *sql.Conn, id string, result payments.PaymentResponse, lease time.Time) error {
+	result.Status = payments.NormalizeStatus(result.Status)
+	res, err := conn.ExecContext(ctx, `UPDATE payments SET status=$1,provider_ref=$2,error=$3,updated_at=now() WHERE id=$4 AND status='PENDING' AND updated_at=$5`, result.Status, result.ProviderRef, result.Error, id, lease)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("payment %s was not updated", id)
+	}
+	return nil
 }
 func (s *server) charge(r *http.Request, req payments.RouterPaymentRequest, key, gateway string) payments.PaymentResponse {
 	c := s.circuits[gateway]
 	if s.breakerEnabled && (c == nil || !c.Allow()) {
 		return payments.PaymentResponse{Status: "PENDING", Error: "gateway circuit open"}
 	}
-	var lastErr error
 	providerContext := payments.ContextWithTraceHeaders(r.Context(), payments.TraceHeaders(r))
-	for attempt := 0; attempt < 2; attempt++ {
-		result := s.adapters[gateway](providerContext, req, key)
-		if result.Status == "PENDING" {
-			lastErr = fmt.Errorf("%s", result.Error)
-			continue
-		}
+	result := s.adapters[gateway](providerContext, req, key)
+	result.Status = payments.NormalizeStatus(result.Status)
+	if result.Status == "PENDING" {
 		if s.breakerEnabled {
-			c.Success()
+			c.Failure()
 		}
-		return payments.PaymentResponse{Status: result.Status, ProviderRef: result.ProviderRef, Error: result.Error}
+		if result.Error == "" {
+			result.Error = "provider response uncertain"
+		}
+		return payments.PaymentResponse{Status: "PENDING", ProviderRef: result.ProviderRef, Error: result.Error}
 	}
 	if s.breakerEnabled {
-		c.Failure()
+		c.Success()
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("provider timeout")
-	}
-	return payments.PaymentResponse{Status: "PENDING", Error: lastErr.Error()}
+	return payments.PaymentResponse{Status: result.Status, ProviderRef: result.ProviderRef, Error: result.Error}
 }
 func (s *server) get(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -170,13 +284,22 @@ func (s *server) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/v1/payments/")
-	var out payments.PaymentResponse
-	var created time.Time
-	e := s.db.SQL.QueryRowContext(r.Context(), `SELECT id::text,idempotency_key,status,gateway,COALESCE(provider_ref,''),COALESCE(error,''),created_at FROM payments WHERE id=$1`, id).Scan(&out.ID, &out.IdempotencyKey, &out.Status, &out.Gateway, &out.ProviderRef, &out.Error, &created)
-	if e != nil {
+	if id == "" || strings.Contains(id, "/") {
 		payments.JSON(w, 404, map[string]string{"error": "payment not found"})
 		return
 	}
+	var out paymentLookup
+	var created time.Time
+	e := s.db.SQL.QueryRowContext(r.Context(), `SELECT id::text,idempotency_key,status,gateway,COALESCE(provider_ref,''),COALESCE(error,''),amount_minor,currency,instrument,debtor_participant_id,creditor_participant_id,reference,created_at FROM payments WHERE id=$1`, id).Scan(&out.ID, &out.IdempotencyKey, &out.Status, &out.Gateway, &out.ProviderRef, &out.Error, &out.AmountMinor, &out.Currency, &out.Instrument, &out.DebtorParticipantID, &out.CreditorParticipantID, &out.Reference, &created)
+	if e != nil {
+		if errors.Is(e, sql.ErrNoRows) {
+			payments.JSON(w, 404, map[string]string{"error": "payment not found"})
+		} else {
+			payments.JSON(w, 500, map[string]string{"error": "database read failed"})
+		}
+		return
+	}
+	out.Status = payments.NormalizeStatus(out.Status)
 	out.CreatedAt = created.UTC().Format(time.RFC3339Nano)
 	payments.JSON(w, payments.StatusCode(out.Status), out)
 }
