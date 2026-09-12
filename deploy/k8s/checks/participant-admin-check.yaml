@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: participant-admin-check
+  annotations:
+    # Run on demand and remove after capturing its result.
+    payment-mesh.example.com/purpose: verify-participant-admin-authorization
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 90
+  template:
+    metadata:
+      labels: { app: participant-admin-check }
+      annotations:
+        prometheus.io/scrape: "false"
+        sidecar.istio.io/nativeSidecar: "true"
+    spec:
+      serviceAccountName: participant-admin
+      restartPolicy: Never
+      containers:
+        - name: verify
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "-ceu"]
+          args:
+            - |
+              trap 'curl -fsS -X POST http://127.0.0.1:15000/quitquitquit >/dev/null 2>&1 || true' EXIT
+              until curl -fsS http://127.0.0.1:15021/healthz/ready >/dev/null; do sleep 1; done
+              code="$(curl --max-time 5 -sS -o /tmp/response.json -w '%{http_code}' \
+                -X POST http://participant-payment-manager:8080/v1/participants \
+                -H 'content-type: application/json' -d '{}')"
+              test "$code" = 400

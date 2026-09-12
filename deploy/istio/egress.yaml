@@ -45,11 +45,13 @@ spec:
   host: istio-egressgateway.istio-system.svc.cluster.local
   subsets:
     - name: card
+      labels: { istio: egressgateway }
       trafficPolicy:
         portLevelSettings:
           - port: { number: 80 }
             tls: { mode: ISTIO_MUTUAL, sni: gateway-card.mesh.local }
     - name: bank
+      labels: { istio: egressgateway }
       trafficPolicy:
         portLevelSettings:
           - port: { number: 80 }

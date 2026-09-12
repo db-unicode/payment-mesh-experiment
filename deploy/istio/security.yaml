@@ -64,7 +64,9 @@ spec:
   selector: { matchLabels: { app: participant-payment-manager } }
   action: ALLOW
   rules:
-    - from: [{ source: { principals: ["cluster.local/ns/payments/sa/participant-admin"] } }]
+    # Match the exact Kubernetes identity directly. This supports on-demand
+    # admin Jobs without requiring a permanently running administrative pod.
+    - from: [{ source: { serviceAccounts: ["payments/participant-admin"] } }]
       to: [{ operation: { methods: ["POST"], paths: ["/v1/participants"] } }]
 ---
 apiVersion: security.istio.io/v1beta1
