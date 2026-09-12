@@ -18,7 +18,7 @@ mise run report
 mise run down
 ```
 
-Sin `mise`, usa `go test ./...`, `docker compose -f deploy/docker/docker-compose.yml up -d --build` y las órdenes equivalentes de `mise.toml`. En Windows, ejecútalas dentro de WSL2; `kubectl` y `docker` deben apuntar al mismo contexto de Docker Desktop.
+Sin `mise`, usa `go test ./...`, `docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d --build` y las órdenes equivalentes de `mise.toml`. En Windows, ejecútalas dentro de WSL2; `kubectl` y `docker` deben apuntar al mismo contexto de Docker Desktop. El apagado normal conserva los volúmenes de PostgreSQL y de las pasarelas.
 
 ## Kubernetes
 
@@ -31,6 +31,16 @@ kubectl -n istio-system create secret generic gateway-ca \
   --from-file=ca.crt=deploy/docker/certs/tls.crt \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
+
+Cuando exista el namespace `payments`, ejecuta `mise run k8s-secrets` para entregar al router la credencial de las pasarelas. No copies los tokens a manifiestos ni al informe.
+
+Para que las pasarelas externas exporten al mismo Collector de Kubernetes que Istio, levántalas con:
+
+```sh
+GATEWAY_OTEL_ENDPOINT=http://host.docker.internal:30418 mise run up
+```
+
+El Collector expone OTLP/HTTP en el NodePort 30418 para este entorno local. En Compose sin Kubernetes se usa `http://otel-collector:4318`, disponible después de `mise run observability-up`.
 
 Los manifests solicitan tres PVC ligeros de 256 MiB, uno por bounded context, para conservar el aislamiento y permitir reinicios durante los experimentos. Compose usa tres volúmenes nombrados.
 
@@ -51,6 +61,14 @@ mise run kiali-ui
 
 Abre `http://127.0.0.1:20001`; Kiali queda conectado al Prometheus y Jaeger del namespace `observability`. En **Graph**, selecciona el namespace `payments` y un intervalo que incluya la corrida.
 
+Diagnóstico del scraping y verificación real de mTLS: [Prometheus y mTLS](prometheus-mtls.md).
+
 ## Gateway scenarios
 
-Los mocks sirven TLS en `https://localhost:8091` (card) y `https://localhost:8092` (bank). El router local permite el certificado autofirmado mediante `GATEWAY_TLS_INSECURE=true`; en Kubernetes la aplicación habla HTTP hasta Istio y el egress gateway origina TLS hacia los mocks del host (`host.docker.internal`). Cambia un comportamiento con `curl -k -X POST https://localhost:8091/admin/behavior -H 'content-type: application/json' -d '{"behavior":"timeout"}'`. Los contratos son distintos: card usa `/v1/card/authorizations` y estados `AUTHORIZED/DECLINED`; bank usa `/v2/transfers` y estados `ACCEPTED/REJECTED`.
+Los mocks sirven TLS en `https://localhost:8091` (card) y `https://localhost:8092` (bank). El router local permite el certificado autofirmado mediante `GATEWAY_TLS_INSECURE=true`; en Kubernetes la aplicación habla HTTP hasta Istio y el egress gateway origina TLS hacia los mocks del host (`host.docker.internal`). Los controles `/admin/behavior` y `/stats` requieren `X-Gateway-Admin`; el runner lee su credencial de `.env` automáticamente. Las rutas de pago requieren `X-Gateway-Auth`, añadido por el router. Los contratos son distintos: card usa `/v1/card/authorizations` y estados `AUTHORIZED/DECLINED`; bank usa `/v2/transfers` y estados `ACCEPTED/REJECTED`.
+
+## Pruebas de código e integración
+
+`mise run test` ejecuta las pruebas de Go. `mise run test-integration` ejecuta además las pruebas de PostgreSQL con contenedores y una red temporales, independientes de las bases de datos del experimento. Requiere Docker activo y una imagen de ejecución local; el script muestra los casos ejecutados y elimina sus recursos temporales al terminar.
+
+Las regresiones cubren duplicados concurrentes, conflicto de contenido, conservación de `PENDING` cuando falla la escritura del resultado, recuperación con la misma clave y reconciliación desde el operador. La suite incluye pruebas de roles, autenticación, errores normalizados y exportación OTLP con el mismo contexto de traza.

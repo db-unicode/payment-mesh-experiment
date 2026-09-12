@@ -31,11 +31,10 @@ class PaymentUser(HttpUser):
             if INGRESS_HOST:
                 headers["Host"] = INGRESS_HOST
             with self.client.post("/v1/payments", json=payload, headers=headers, name=SCENARIO, catch_response=True) as response:
-                # During an instance crash, a payment that was accepted by the
-                # deleted router but whose response was lost is explicitly
-                # normalized as PENDING. Both 200 and 202 are available,
-                # non-5xx outcomes for the failover experiment.
-                expected = (202,) if SCENARIO in ("degraded", "timeout", "breaker") else ((422,) if SCENARIO == "decline" else ((200, 202) if SCENARIO == "load" else (200,)))
+                # Degraded-provider scenarios intentionally expose PENDING;
+                # the normal/load scenarios measure completed SUCCEEDED
+                # payments and therefore require HTTP 200.
+                expected = (202,) if SCENARIO in ("degraded", "timeout", "breaker") else ((422,) if SCENARIO == "decline" else (200,))
                 if response.status_code not in expected:
                     response.failure(f"unexpected status {response.status_code}; expected {expected}")
 
