@@ -63,6 +63,8 @@ Abre `http://127.0.0.1:20001`; Kiali queda conectado al Prometheus y Jaeger del 
 
 Diagnóstico del scraping y verificación real de mTLS: [Prometheus y mTLS](prometheus-mtls.md).
 
+Grafana con paneles de demostración: `mise run grafana-install`, después `mise run kiali-install` y, en otra terminal, `mise run grafana-ui`. Abre `http://localhost:3000/d/payment-mesh`. Consulta [los paneles y sus límites](grafana.md).
+
 ## Gateway scenarios
 
 Los mocks sirven TLS en `https://localhost:8091` (card) y `https://localhost:8092` (bank). El router local permite el certificado autofirmado mediante `GATEWAY_TLS_INSECURE=true`; en Kubernetes la aplicación habla HTTP hasta Istio y el egress gateway origina TLS hacia los mocks del host (`host.docker.internal`). Los controles `/admin/behavior` y `/stats` requieren `X-Gateway-Admin`; el runner lee su credencial de `.env` automáticamente. Las rutas de pago requieren `X-Gateway-Auth`, añadido por el router. Los contratos son distintos: card usa `/v1/card/authorizations` y estados `AUTHORIZED/DECLINED`; bank usa `/v2/transfers` y estados `ACCEPTED/REJECTED`.

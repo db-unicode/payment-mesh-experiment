@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: grafana }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: grafana }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: grafana } }
+  template:
+    metadata: { labels: { app: grafana, version: "12.4.0" } }
+    spec:
+      serviceAccountName: grafana
+      securityContext: { fsGroup: 472 }
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.4.0
+          ports: [{ containerPort: 3000 }]
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+          env:
+            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer }
+            - { name: GF_USERS_ALLOW_SIGN_UP, value: "false" }
+            - { name: GF_ANALYTICS_REPORTING_ENABLED, value: "false" }
+            - { name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false" }
+            - { name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH, value: /var/lib/grafana/dashboards/payment-mesh-dashboard.json }
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: grafana-admin, key: admin-password }
+          readinessProbe: { httpGet: { path: /api/health, port: 3000 }, initialDelaySeconds: 5, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /api/health, port: 3000 }, initialDelaySeconds: 30, periodSeconds: 10 }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/grafana }
+            - { name: datasource, mountPath: /etc/grafana/provisioning/datasources }
+            - { name: provider, mountPath: /etc/grafana/provisioning/dashboards }
+            - { name: dashboard, mountPath: /var/lib/grafana/dashboards }
+      volumes:
+        - { name: data, emptyDir: {} }
+        - { name: datasource, configMap: { name: grafana-datasource } }
+        - { name: provider, configMap: { name: grafana-provider } }
+        - { name: dashboard, configMap: { name: grafana-dashboard } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: grafana }
+spec:
+  selector: { app: grafana }
+  ports: [{ name: http-grafana, port: 3000, targetPort: 3000 }]

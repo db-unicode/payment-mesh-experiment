@@ -1,9 +1,15 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: observability
-resources: [namespace.yaml, otel.yaml, jaeger.yaml, prometheus.yaml]
+resources: [namespace.yaml, otel.yaml, jaeger.yaml, prometheus.yaml, grafana.yaml, kiali-telemetry.yaml]
 configMapGenerator:
   - name: otel-config
     files: [config.yaml=otel-collector-config.yaml]
   - name: prometheus-config
     files: [prometheus.yml=prometheus.yml]
+  - name: grafana-datasource
+    files: [datasources.yaml=grafana-datasource.yaml]
+  - name: grafana-provider
+    files: [dashboards.yaml=grafana-provider.yaml]
+  - name: grafana-dashboard
+    files: [payment-mesh-dashboard.json=payment-mesh-dashboard.json]

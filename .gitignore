@@ -11,3 +11,4 @@ deploy/docker/certs/
 /report.md
 bin/
 *.log
+docs/demo-walkthrough.md

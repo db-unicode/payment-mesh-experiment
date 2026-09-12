@@ -1,0 +1,144 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "links": [
+    {"title": "Jaeger traces", "type": "link", "url": "http://localhost:16686", "targetBlank": true},
+    {"title": "Kiali service graph", "type": "link", "url": "http://localhost:20002", "targetBlank": true}
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to read this dashboard",
+      "gridPos": {"h": 4, "w": 24, "x": 0, "y": 0},
+      "options": {"mode": "markdown", "content": "This board uses destination-reported Istio telemetry for the payment path. HTTP outcome panels separate **200 success**, **202 pending**, **422 rejected**, and **5xx errors**; no-data is shown as no-data. The mTLS panel measures only the two internal operator hops (operator → router and operator → participant manager), excludes Prometheus scrapes, and never substitutes 100% when traffic is absent.\n\nDatabase panels show TCP connectivity telemetry only, not SQL health or data correctness. Provider idempotency counters are not Prometheus series: use the experiment evidence `card-stats-before.json` / `card-stats.json` files to inspect them; RPS alone cannot prove exactly-once charging."}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Payment HTTP outcomes",
+      "description": "Ingress destination-reported responses at payment-operator.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "No data"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"refId": "A", "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload=\"payment-operator\",destination_workload_namespace=\"payments\",source_workload=\"istio-ingressgateway\",response_code=\"200\"}[5m]))", "legendFormat": "200 success", "datasource": {"type": "prometheus", "uid": "prometheus"}},
+        {"refId": "B", "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload=\"payment-operator\",destination_workload_namespace=\"payments\",source_workload=\"istio-ingressgateway\",response_code=\"202\"}[5m]))", "legendFormat": "202 pending", "datasource": {"type": "prometheus", "uid": "prometheus"}},
+        {"refId": "C", "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload=\"payment-operator\",destination_workload_namespace=\"payments\",source_workload=\"istio-ingressgateway\",response_code=\"422\"}[5m]))", "legendFormat": "422 rejected", "datasource": {"type": "prometheus", "uid": "prometheus"}},
+        {"refId": "D", "expr": "sum(rate(istio_requests_total{reporter=\"destination\",destination_workload=\"payment-operator\",destination_workload_namespace=\"payments\",source_workload=\"istio-ingressgateway\",response_code=~\"5..\"}[5m]))", "legendFormat": "5xx errors", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Payment traffic by destination",
+      "description": "Destination reporter; excludes Prometheus scrape traffic by restricting source workloads.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "No data"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"refId": "A", "expr": "sum by (source_workload,destination_workload) (rate(istio_requests_total{reporter=\"destination\",destination_workload=~\"payment-operator|payment-router|participant-payment-manager\",destination_workload_namespace=\"payments\",source_workload=~\"istio-ingressgateway|payment-operator\"}[5m]))", "legendFormat": "{{source_workload}} → {{destination_workload}}", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Operator and internal p95 latency",
+      "description": "Istio request duration histogram in milliseconds for the operator ingress hop and operator → internal services; this is server-observed hop latency, not browser end-to-end latency.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "fieldConfig": {"defaults": {"unit": "ms", "noValue": "No data"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"refId": "A", "expr": "histogram_quantile(0.95, sum by (le,source_workload,destination_workload) (rate(istio_request_duration_milliseconds_bucket{reporter=\"destination\",destination_workload=~\"payment-operator|payment-router|participant-payment-manager\",destination_workload_namespace=\"payments\",source_workload=~\"istio-ingressgateway|payment-operator\"}[5m])))", "legendFormat": "{{source_workload}} → {{destination_workload}} p95", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "mTLS coverage: internal payment hops",
+      "description": "Percentage of destination-reported operator → router/participant requests with connection_security_policy=mutual_tls. No traffic stays no-data.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "noValue": "No data"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"refId": "A", "expr": "100 * (sum by (destination_workload) (rate(istio_requests_total{reporter=\"destination\",source_workload=\"payment-operator\",source_workload_namespace=\"payments\",destination_workload=~\"payment-router|participant-payment-manager\",destination_workload_namespace=\"payments\",connection_security_policy=\"mutual_tls\"}[5m])) or on(destination_workload) (sum by (destination_workload) (rate(istio_requests_total{reporter=\"destination\",source_workload=\"payment-operator\",source_workload_namespace=\"payments\",destination_workload=~\"payment-router|participant-payment-manager\",destination_workload_namespace=\"payments\"}[5m])) * 0)) / sum by (destination_workload) (rate(istio_requests_total{reporter=\"destination\",source_workload=\"payment-operator\",source_workload_namespace=\"payments\",destination_workload=~\"payment-router|participant-payment-manager\",destination_workload_namespace=\"payments\"}[5m]))", "legendFormat": "{{destination_workload}} mTLS %", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Per-hop request rate",
+      "description": "The two authenticated internal application hops, destination reporter only.",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 20},
+      "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "No data"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"refId": "A", "expr": "sum by (source_workload,destination_workload) (rate(istio_requests_total{reporter=\"destination\",source_workload=\"payment-operator\",source_workload_namespace=\"payments\",destination_workload=~\"payment-router|participant-payment-manager\",destination_workload_namespace=\"payments\"}[5m]))", "legendFormat": "{{source_workload}} → {{destination_workload}}", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Database TCP connectivity",
+      "description": "Istio TCP connection-open rate to each PostgreSQL workload; this does not assert database readiness or SQL correctness.",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 20},
+      "fieldConfig": {"defaults": {"unit": "connps", "noValue": "No data"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"refId": "A", "expr": "sum by (source_workload,destination_workload) (rate(istio_tcp_connections_opened_total{reporter=\"destination\",destination_workload=~\"operator-db|router-db|participant-db\"}[5m]))", "legendFormat": "{{source_workload}} → {{destination_workload}}", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "App targets UP (expected: 3)",
+      "description": "Prometheus target health for operator, router, and participant manager only. Value is the number of expected targets up (3 is healthy).",
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 27},
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0, "max": 3, "noValue": "No data", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "yellow", "value": 1}, {"color": "green", "value": 3}]}}, "overrides": []},
+      "options": {"reduceOptions": {"calcs": ["min"], "fields": "", "values": false}, "orientation": "auto", "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "targets": [{"refId": "A", "expr": "sum(up{job=~\"payment-operator|payment-router|participant-manager\"})", "instant": true, "datasource": {"type": "prometheus", "uid": "prometheus"}}]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Database proxy scrape health (1 = UP)",
+      "description": "Target up/down evidence only; DB target status is not SQL readiness.",
+      "gridPos": {"h": 7, "w": 18, "x": 6, "y": 27},
+      "transformations": [{"id":"organize","options":{"excludeByName":{"Time":true,"kubernetes_namespace":true},"renameByName":{"app":"Database","Value":"Scrape UP"}}}],
+      "fieldConfig": {"defaults": {"noValue": "No data"}, "overrides": []},
+      "options": {"showHeader": true, "footer": {"show": false}, "cellHeight": "sm"},
+      "targets": [
+        {"refId": "A", "expr": "max by (app,kubernetes_namespace) (up{job=\"istio-mesh\",app=~\"operator-db|router-db|participant-db\"})", "instant": true, "format": "table", "datasource": {"type": "prometheus", "uid": "prometheus"}}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Envoy enforced outlier ejections",
+      "description": "Shown only when the scraped Envoy metric exists; no-data means this evidence is unavailable, not zero.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 34},
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "No Envoy outlier metric scraped"}, "overrides": []},
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}, "tooltip": {"mode": "multi"}},
+      "targets": [{"refId": "A", "expr": "sum by (cluster_name) (increase(envoy_cluster_outlier_detection_ejections_enforced_total{job=\"istio-mesh\",cluster_name=~\".*gateway.*|.*payment-router.*\"}[5m]))", "legendFormat": "{{cluster_name}}", "datasource": {"type": "prometheus", "uid": "prometheus"}}]
+    },
+    {
+      "id": 11,
+      "type": "text",
+      "title": "Idempotency evidence (not Prometheus)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 34},
+      "options": {"mode": "markdown", "content": "Provider `effective_charges` is exposed by the gateway mock's authenticated `/stats` control endpoint and captured by the experiment runner as before/after JSON files. It is intentionally not represented as a Prometheus RPS panel: request rate cannot establish exactly-once provider charging. Inspect `evidence/runs/<timestamp>/05-idempotency-duplicates/metrics/card-stats-before.json` and `card-stats.json` alongside the ten response files."}
+    }
+  ],
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["payment-mesh", "experiments", "istio", "mTLS"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "refresh": "10s",
+  "timezone": "browser",
+  "title": "Payment Mesh - Demonstration",
+  "uid": "payment-mesh",
+  "version": 1,
+  "weekStart": ""
+}
